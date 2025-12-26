@@ -1,0 +1,39 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.example.quaternion'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.quaternion"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                abiFilters 'arm64-v8a'
+                // Pass a flag so CMake knows it's building for Android
+                arguments "-DANDROID_STL=c++_shared" 
+            }
+        }
+    }
+
+    // --- MAGICAL GLUE ---
+    // This tells Android: "Go look in the folder FetchContent created for the Java code"
+    sourceSets {
+        main {
+            java.srcDirs += '../../external/SDL/android-project/app/src/main/java'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            // Point to the Master CMakeLists.txt in the project root
+            path "../../CMakeLists.txt"
+        }
+    }
+}
