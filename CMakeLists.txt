@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.22.1)
 # STRICT C Support
 project(Quaternion C)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # ------------------------------------------------------------------------------
 # 1. Configure SDL Options BEFORE downloading
 # ------------------------------------------------------------------------------
@@ -37,7 +39,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/SDL ${CMAKE_CURRENT_BINARY
 # ------------------------------------------------------------------------------
 # 3. Define the Target
 # ------------------------------------------------------------------------------
-set(SOURCE_FILES src/main.c)
+include_directories(src)
+
+file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 
 if(ANDROID)
     # --- ANDROID MODE ---
@@ -60,4 +64,15 @@ else()
         target_link_libraries(main PRIVATE m)
     endif()
 
+    if(WIN32)
+        add_custom_command(TARGET main POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3-shared>
+            $<TARGET_FILE_DIR:main>
+            COMMENT "Copying SDL3.dll to executable directory..."
+        )
+    endif()
+
 endif()
+
+target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/src)
