@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.quaternion'
+    namespace 'com.rancidponcho.quaternion' 
     compileSdk 34
 
-    defaultConfig {
-        applicationId "com.example.quaternion"
+defaultConfig {
+        applicationId "com.rancidponcho.quaternion" 
         minSdk 21
         targetSdk 34
         versionCode 1
@@ -16,8 +16,11 @@ android {
         externalNativeBuild {
             cmake {
                 abiFilters 'arm64-v8a'
-                // Pass a flag so CMake knows it's building for Android
-                arguments "-DANDROID_STL=c++_shared" 
+                arguments "-DANDROID_STL=c++_shared"
+                
+                // Forces Gradle to only build the "Quaternion" library target
+                // defined in CMakeLists.txt
+                targets "Quaternion"
             }
         }
     }

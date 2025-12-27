@@ -3,39 +3,7 @@
 #include <SDL3/SDL_main.h> // required for main entry point (Android)
 #include <SDL3/SDL_stdinc.h>
 
-#define WINDOW_WIDTH 1280
-#define WINDOW_HEIGHT 720
 #define PLAYER_SPEED 400.0f
-
-bool Engine_Init(EngineContext *ctx) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_Log("SSDL_Init Failed: %s", SDL_GetError());
-        return false;
-    }
-
-    ctx->window = SDL_CreateWindow("Quaternion", WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE);
-    if (!ctx->window) {
-        SDL_Log("Window Creation Failed: %s", SDL_GetError());
-        return false;
-    }
-
-    ctx->renderer = SDL_CreateRenderer(ctx->window, NULL);
-    if (!ctx->renderer) {
-        SDL_Log("Renderer Creation Failed: %s", SDL_GetError());
-        return false;
-    }
-
-    Input_Init(ctx);
-
-    ctx->lastTime = SDL_GetTicks();
-    return true;
-}
-
-void Engine_Shutdown(EngineContext *ctx) {
-    SDL_DestroyRenderer(ctx->renderer);
-    SDL_DestroyWindow(ctx->window);
-    SDL_Quit();
-}
 
 float timer = 0.0f;
 
@@ -46,10 +14,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Temporary Player State
+    // Initial Player State
     // TODO: move to GameState
-    float playerX = WINDOW_WIDTH / 2.0f;
-    float playerY = WINDOW_HEIGHT / 2.0f;
+    float playerX = 1280 / 2.0f;
+    float playerY = 720 / 2.0f;
     float playerSize = 50.0f;
     Uint8 r = 255, g = 255, b = 255;
 

@@ -19,6 +19,12 @@ lib/
 *.ilk
 *.exp
 
+# --- Compiled Shaders ---
+*.spv
+*.msl
+*.dxil
+*.metallib
+
 # --- External Dependencies (FetchContent) ---
 # We ignore SDL because CMake downloads it automatically.
 # We don't want to commit 100MB of SDL source code.
