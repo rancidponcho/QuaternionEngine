@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'com.rancidponcho.quaternion' 
     compileSdk 34
+    ndkVersion "27.0.12077973"
 
 defaultConfig {
         applicationId "com.rancidponcho.quaternion" 
@@ -25,11 +26,11 @@ defaultConfig {
         }
     }
 
-    // --- MAGICAL GLUE ---
     // This tells Android: "Go look in the folder FetchContent created for the Java code"
     sourceSets {
         main {
             java.srcDirs += '../../external/SDL/android-project/app/src/main/java'
+            assets.srcDirs += ['../../assets']
         }
     }
 

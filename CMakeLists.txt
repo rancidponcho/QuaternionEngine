@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.22.1)
 
 project(Quaternion C)
 
+# ------------------------------------------------------------------------------
+# 0. Global Configuration (CRITICAL FIXES)
+# ------------------------------------------------------------------------------
+
+# FIX: Enforce 16KB memory page alignment for Pixel 10 / Android 15
+# This MUST be set before adding SDL so it applies to libSDL3.so too.
+if(ANDROID)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ------------------------------------------------------------------------------
@@ -45,6 +56,9 @@ file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 if(ANDROID)
     # --- ANDROID MODE ---
     add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
+
+    # Force output to be named "libmain.so"
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "main")
     
     # Android MUST use the shared version of SDL
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3-shared)
@@ -54,7 +68,7 @@ else()
     # --- DESKTOP (Linux/Win/Mac) MODE ---
     add_executable(${PROJECT_NAME} ${SOURCE_FILES})
     
-    # Use the generic "SDL3::SDL3" alias. 
+    # Use the generic "SDL3::SDL3" alias.
     # Since we set SDL_STATIC=ON above, this will work nicely.
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
     
@@ -108,7 +122,7 @@ function(compile_shader SHADER_SOURCE SHADER_OUTPUT PROFILE ENTRYPOINT)
         
         add_custom_command(
             OUTPUT ${SPIRV_BIN}
-            COMMAND ${DXC_EXECUTABLE} -T ${PROFILE} -E ${ENTRYPOINT} -spirv -Fo ${SPIRV_BIN} ${SHADER_SOURCE}
+            COMMAND ${DXC_EXECUTABLE} -T ${PROFILE} -E ${ENTRYPOINT} -spirv -fspv-target-env=vulkan1.0 -fvk-use-dx-layout -Fo ${SPIRV_BIN} ${SHADER_SOURCE}
             DEPENDS ${SHADER_SOURCE}
             COMMENT "Compiling ${SHADER_SOURCE} -> SPIR-V"
             VERBATIM
