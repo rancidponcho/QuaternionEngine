@@ -76,7 +76,8 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
-!Makefile # EXCEPTION: Do NOT ignore our custom root Makefile
+# EXCEPTION: Do NOT ignore our custom root Makefile
+!Makefile
 CTestTestfile.cmake
 
 # --- Clangd / LSP / Editors ---
