@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "SDL3/SDL_gpu.h"
+#include "SDL3/SDL_video.h"
 #include "input.h"
 
 #include <stdio.h> // snprintf
@@ -29,7 +30,7 @@ bool Engine_Init(EngineContext *ctx) {
         return false;
     }
 
-    ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, SDL_WINDOW_RESIZABLE);
+    ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE);
     if (!ctx->window) {
         SDL_Log("CRITICAL: Window Creation Failed: %s", SDL_GetError());
         return false;

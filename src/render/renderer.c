@@ -4,7 +4,7 @@
 #include <stdio.h> // SDL_Log
 #include <wchar.h>
 
-#define BASE_SHORT_SIDE 9
+#define BASE_SHORT_SIDE 9 
 
 /* ==========================================================================
  * INTERNAL HELPER FUNCTIONS (Static)

@@ -2,19 +2,16 @@
 <resources>
     <style name="QuaternionTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
         
+        <item name="android:windowFullscreen">true</item>
+
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
 
-        <item name="android:windowTranslucentStatus">true</item>
-
-        <item name="android:windowTranslucentNavigation">false</item> 
-        
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        
         <item name="android:navigationBarColor">@android:color/transparent</item>
         
         <item name="android:enforceNavigationBarContrast">false</item>
         
         <item name="android:windowLightNavigationBar">false</item>
 
-    </style>
+        </style>
 </resources>
