@@ -35,8 +35,7 @@ macos: bootstrap
 	@echo "--- Generating macOS Project ---"
 	mkdir -p build_macos
 	cd build_macos && cmake -G Xcode .. -DCMAKE_SYSTEM_NAME=Darwin
-	@echo "--- Opening Xcode ---"
-	open build_macos/Quaternion.xcodeproj
+	cmake --build .
 
 # --- iOS (Xcode Project) ---
 ios: bootstrap

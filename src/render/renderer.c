@@ -73,7 +73,6 @@ bool Renderer_Init(EngineContext* ctx) {
         // Platform is PC, Mac, or iOS (Bundle)
         // We constructed CMake to put shaders in a 'shaders' folder relative to the binary/resource path
         snprintf(shaderPath, sizeof(shaderPath), "%sshaders/BasicCompute.%s", basePath, ext);
-        SDL_free(basePath); // IMPORTANT: You must free the string returned by SDL
     } else {
         // Platform is likely Android
         // SDL3 on Android maps relative paths directly to the Asset Manager.

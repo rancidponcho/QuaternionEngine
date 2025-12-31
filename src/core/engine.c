@@ -73,22 +73,14 @@ bool Engine_Init(EngineContext *ctx) {
 void Engine_Shutdown(EngineContext *ctx) {
     SDL_Log("SYSTEM: Shutting down...");
     
-    // Release VRAM resources
-    if (ctx->drawTexture) {
-        SDL_ReleaseGPUTexture(ctx->gpu, ctx->drawTexture);
-    }
-    
-    // Release Pipeline State Objects
-    if (ctx->computePipeline) {
-        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->computePipeline);
-    }
-    
-    // Detach from Driver and OS
     if (ctx->gpu) {
         SDL_DestroyGPUDevice(ctx->gpu);
+	ctx->gpu = NULL;
     }
+
     if (ctx->window) {
         SDL_DestroyWindow(ctx->window);
+	ctx->window = NULL;
     }
     
     SDL_Quit();
