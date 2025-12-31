@@ -66,27 +66,35 @@ else()
     add_executable(${PROJECT_NAME} ${SOURCE_FILES})
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
     
+    # 1. Windows Specific: Copy SDL3.dll
     if(WIN32)
-        # 1. Copy SDL3.dll
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:SDL3::SDL3>
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
             COMMENT "Copying SDL3.dll..."
         )
+    endif()
 
-        # 2. Copy Shaders (Make the directory first, then copy the file)
+    # 2. Linux Specific: Link Math Library
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(${PROJECT_NAME} PRIVATE m)
+    endif()
+
+    # 3. BOTH Windows & Linux: Copy Shaders
+    # (We exclude APPLE because macOS uses App Bundles, handled elsewhere)
+    if(WIN32 OR (UNIX AND NOT APPLE))
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            # Create 'shaders' folder in the build directory
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
+            
+            # Copy the SPV file from assets -> build/shaders
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv"
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/BasicCompute.spv"
-            COMMENT "Copying Shaders..."
+            
+            COMMENT "Copying Shaders to Output Directory..."
         )
-    endif()
-
-    if(UNIX)
-        target_link_libraries(${PROJECT_NAME} PRIVATE m)
     endif()
 endif()
 
