@@ -1,6 +1,7 @@
 # --- Build Directories ---
 build/
 build_ios/
+build_macos/
 build_temp/
 bin/
 lib/

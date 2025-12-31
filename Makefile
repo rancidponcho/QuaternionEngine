@@ -4,66 +4,55 @@ BUILD_DIR := build
 ANDROID_DIR := android
 SDL_SRC := external/SDL
 
-# Detect OS for Desktop Run
-UNAME_S := $(shell uname -s)
+# --- Targets ---
+.PHONY: all clean clean-android bootstrap android desktop macos ios
 
-# --- Main Targets ---
-
-.PHONY: all clean clean-android bootstrap android desktop run
-
-# Default target: Build Desktop
+# Default
 all: desktop
 
-# 1. Bootstrap: Downloads SDL3 and sets up Android Gradle wrappers
 bootstrap: $(SDL_SRC)/CMakeLists.txt $(ANDROID_DIR)/gradlew
 
-# Logic to fetch SDL if missing
 $(SDL_SRC)/CMakeLists.txt:
-	@echo "--- Bootstrapping SDL3 ---"
-	cmake -S . -B build_temp
-	rm -rf build_temp
-	@echo "--- SDL3 Downloaded ---"
+	@echo "--- Fetching SDL3 ---"
+	git clone --depth 1 https://github.com/libsdl-org/SDL.git $(SDL_SRC)
 
-# Logic to copy Gradle wrapper from SDL to our Android folder
-$(ANDROID_DIR)/gradlew: $(SDL_SRC)/CMakeLists.txt
-	@echo "--- Setting up Android Gradle Wrapper ---"
+$(ANDROID_DIR)/gradlew:
+	@echo "--- Setting up Android Gradle ---"
 	cp $(SDL_SRC)/android-project/gradlew $(ANDROID_DIR)/
 	cp $(SDL_SRC)/android-project/gradlew.bat $(ANDROID_DIR)/
 	cp -r $(SDL_SRC)/android-project/gradle $(ANDROID_DIR)/
 	chmod +x $(ANDROID_DIR)/gradlew
 
-# 2. Desktop Build (Linux/Mac/Win)
+# --- Desktop (Linux/Win) ---
 desktop: bootstrap
-	@echo "--- Building for Desktop ---"
+	@echo "--- Building Desktop ---"
 	mkdir -p $(BUILD_DIR)
-	cd $(BUILD_DIR) && cmake .. && make
+	cd $(BUILD_DIR) && cmake ..
+	cd $(BUILD_DIR) && cmake --build .
 
-run: desktop
-	@echo "--- Running Desktop App ---"
-	$(BUILD_DIR)/${PROJECT_NAME}
+# --- macOS (Xcode Project) ---
+macos: bootstrap
+	@echo "--- Generating macOS Project ---"
+	mkdir -p build_macos
+	cd build_macos && cmake -G Xcode .. -DCMAKE_SYSTEM_NAME=Darwin
+	@echo "--- Opening Xcode ---"
+	open build_macos/Quaternion.xcodeproj
 
-# 3. Android Build
+# --- iOS (Xcode Project) ---
+ios: bootstrap
+	@echo "--- Generating iOS Project ---"
+	mkdir -p build_ios
+	cd build_ios && cmake -G Xcode .. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+	@echo "--- Opening Xcode ---"
+	open build_ios/Quaternion.xcodeproj
+
+# --- Android ---
 android:
-	@echo "--- Building Android APK (Debug) ---"
 	cd $(ANDROID_DIR) && ./gradlew assembleDebug
 
-android-release: bootstrap
-	@echo "--- Building Android APK (Release) ---"
-	cd $(ANDROID_DIR) && ./gradlew assembleRelease
-
-# 4. Clean Up
+# --- Clean ---
 clean:
-	@echo "--- Cleaning Desktop Build ---"
-	rm -rf $(BUILD_DIR)
-	rm -rf build_temp
+	rm -rf $(BUILD_DIR) build_macos build_ios
 
 clean-android:
-	@echo "--- Cleaning Android Build ---"
 	cd $(ANDROID_DIR) && ./gradlew clean
-
-nuke: clean clean-android
-	@echo "--- Nuking External Dependencies (SDL) ---"
-	rm -rf external/
-	# Remove the copied gradle wrapper files to reset completely
-	rm -f $(ANDROID_DIR)/gradlew $(ANDROID_DIR)/gradlew.bat
-	rm -rf $(ANDROID_DIR)/gradle

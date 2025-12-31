@@ -39,7 +39,7 @@ static void* LoadFile(const char* path, size_t* outSize) {
  */
 static const char* GetShaderExtension() {
     #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
-        return "msl";
+        return "metallib";
     #else
         return "spv";
     #endif
@@ -60,29 +60,49 @@ bool Renderer_Init(EngineContext* ctx) {
     // --------------------------------------------------------------------------
     // PIPELINE COMPILATION (Shader Loading)
     // --------------------------------------------------------------------------
-    char shaderPath[128];
+    char shaderPath[256];
+    const char* ext = GetShaderExtension();
+    
+    // SDL_GetBasePath returns:
+    // - macOS/iOS: The absolute path to the 'Resources' folder inside the Bundle.
+    // - PC/Linux: The absolute path to the executable's directory.
+    // - Android: NULL (usually), because assets are packed inside the APK.
+    const char* basePath = SDL_GetBasePath();
 
-#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
-    const char* pathPrefix = "";
-#else
-    const char* pathPrefix = "assets/";
-#endif
+    if (basePath) {
+        // Platform is PC, Mac, or iOS (Bundle)
+        // We constructed CMake to put shaders in a 'shaders' folder relative to the binary/resource path
+        snprintf(shaderPath, sizeof(shaderPath), "%sshaders/BasicCompute.%s", basePath, ext);
+        SDL_free(basePath); // IMPORTANT: You must free the string returned by SDL
+    } else {
+        // Platform is likely Android
+        // SDL3 on Android maps relative paths directly to the Asset Manager.
+        // Since CMake copies assets to 'assets/shaders', the relative path is just 'shaders/...'
+        snprintf(shaderPath, sizeof(shaderPath), "shaders/BasicCompute.%s", ext);
+    }
 
-    snprintf(shaderPath, sizeof(shaderPath), "%sshaders/BasicCompute.%s", 
-            pathPrefix, GetShaderExtension());
-
+    SDL_Log("Loading shader from: %s", shaderPath);
     size_t codeSize;
     void* code = LoadFile(shaderPath, &codeSize);
     if (!code) {
         return false; // Error logged in LoadFile
     }
 
+    // Determine Entry Point Name
+    // Metal (spirv-cross) renames 'main' to 'main0' by default.
+    // Vulkan/SPIR-V keeps it as 'main'.
+    #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
+        const char* entryPointName = "main0"; 
+    #else
+        const char* entryPointName = "main";
+    #endif
+
     // Define the Compute Pipeline State Object (PSO).
     // This bakes the register layout and shader code into a hardware object.
     SDL_GPUComputePipelineCreateInfo pipelineInfo = {
         .code = code,
         .code_size = codeSize,
-        .entrypoint = "main",
+        .entrypoint = entryPointName,
         .format = GetShaderFormat(),
         // RESOURCE LAYOUT:
         // num_readwrite = 1 maps to Space 1 (Set 1) in Vulkan/SDL.
@@ -244,6 +264,3 @@ void Renderer_Draw(EngineContext* ctx) {
         SDL_SubmitGPUCommandBuffer(cmd);
     }
 }
-
-
-

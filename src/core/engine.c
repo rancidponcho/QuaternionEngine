@@ -10,7 +10,7 @@
  */
 SDL_GPUShaderFormat GetShaderFormat() {
     #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
-        return SDL_GPU_SHADERFORMAT_MSL;
+        return SDL_GPU_SHADERFORMAT_METALLIB;
     #else
         return SDL_GPU_SHADERFORMAT_SPIRV;
     #endif

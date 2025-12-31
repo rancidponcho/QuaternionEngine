@@ -1,165 +1,154 @@
 cmake_minimum_required(VERSION 3.22.1)
-
 project(Quaternion C)
 
 # ------------------------------------------------------------------------------
-# 0. Global Configuration (CRITICAL FIXES)
+# 0. Global Configuration
 # ------------------------------------------------------------------------------
-
-# FIX: Enforce 16KB memory page alignment for Pixel 10 / Android 15
-# This MUST be set before adding SDL so it applies to libSDL3.so too.
 if(ANDROID)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
 endif()
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
 # ------------------------------------------------------------------------------
-# 1. Configure SDL Options BEFORE downloading
+# 1. Fetch SDL3
 # ------------------------------------------------------------------------------
-# Force these settings to know exactly what targets get created
 set(SDL_SHARED ON CACHE BOOL "" FORCE) 
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST   OFF CACHE BOOL "" FORCE)
 
-# ------------------------------------------------------------------------------
-# 2. Fetch SDL3
-# ------------------------------------------------------------------------------
 include(FetchContent)
-
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        main
     GIT_SHALLOW    TRUE
-    # Force download to "external/SDL" so Gradle can find the Java files later
     SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL"
 )
 
-# Check if SDL is already downloaded to save time
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL/CMakeLists.txt")
-    message(STATUS "Downloading SDL3... (This may take a moment)")
+    message(STATUS "Downloading SDL3...")
     FetchContent_Populate(SDL3)
 endif()
 
-# Make SDL available to the build
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/SDL ${CMAKE_CURRENT_BINARY_DIR}/sdl_build EXCLUDE_FROM_ALL)
 
 # ------------------------------------------------------------------------------
-# 3. Define the Target
+# 2. Define the Target
 # ------------------------------------------------------------------------------
-include_directories(src)
-
 file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 
 if(ANDROID)
-    # --- ANDROID MODE ---
+    # --- ANDROID ---
     add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
-
-    # Force output to be named "libmain.so"
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "main")
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3-shared log)
+
+elseif(APPLE)
+    # --- MACOS / iOS ---
+    add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${SOURCE_FILES})
     
-    # Android MUST use the shared version of SDL
-    target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3-shared)
-    target_link_libraries(${PROJECT_NAME} PRIVATE log)
+    # Configure Bundle Properties (Required for Signing)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.rancidponcho.quaternion"
+        MACOSX_BUNDLE_BUNDLE_NAME "Quaternion"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.rancidponcho.quaternion"
+        # XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "YOUR_TEAM_ID" # Uncomment for physical iOS device
+    )
+
+    find_library(METAL_LIB Metal)
+    find_library(COCOA_LIB Cocoa) # macOS only, ignored on iOS
+    find_library(IOKIT_LIB IOKit)
+    
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 ${METAL_LIB} ${COCOA_LIB} ${IOKIT_LIB})
 
 else()
-    # --- DESKTOP (Linux/Win/Mac) MODE ---
+    # --- LINUX / WINDOWS ---
     add_executable(${PROJECT_NAME} ${SOURCE_FILES})
-    
-    # Use the generic "SDL3::SDL3" alias.
-    # Since we set SDL_STATIC=ON above, this will work nicely.
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
-    
-    # Link Math library (essential for Linux C dev)
-    if(UNIX AND NOT APPLE)
+    if(UNIX)
         target_link_libraries(${PROJECT_NAME} PRIVATE m)
     endif()
-
-    if(WIN32)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL3::SDL3-shared>
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-            COMMENT "Copying SDL3.dll to executable directory..."
-        )
-    endif()
-
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # ------------------------------------------------------------------------------
-# 4. Shader Compilation (HLSL -> SPIR-V)
+# 3. Shader Compilation (The Robust Pipeline)
 # ------------------------------------------------------------------------------
-
-# Find the DXC or SPIRV-CROSS
-# Note: On Windows, this often finds the one inside the Vulkan SDK.
 find_program(DXC_EXECUTABLE dxc)
-if(NOT DXC_EXECUTABLE)
-    message(WARNING "DXC not found! Shaders will not be recompiled. Install the Vulkan SDK.")
-else()
-    message(STATUS "Found DXC: ${DXC_EXECUTABLE}")
-endif()
-
 find_program(SPIRV_CROSS_EXECUTABLE spirv-cross)
-if(NOT SPIRV_CROSS_EXECUTABLE)
-    message(WARNING "SPIRV-CROSS not found! Shaders will not be recompiled. Install the Vulkan SDK.")
-else()
-    message(STATUS "Found SPIRV-CROSS: ${SPIRV_CROSS_EXECUTABLE}")
-endif()
+find_program(XCRUN_EXECUTABLE xcrun)
 
-# Helper function to compile shaders
-function(compile_shader SHADER_SOURCE SHADER_OUTPUT PROFILE ENTRYPOINT)
+# Function: Compile HLSL -> SPV -> (Optional) Metal
+# Params:
+#   SOURCE:   Path to .hlsl file
+#   SPV_OUT:  Path where .spv should be saved (usually assets/shaders/X.spv)
+#   PROFILE:  cs_6_0, etc.
+#   ENTRY:    main
+function(compile_shader SOURCE SPV_OUT PROFILE ENTRY)
     if(DXC_EXECUTABLE)
-        get_filename_component(OUT_DIR ${SHADER_OUTPUT} DIRECTORY)
-        file(MAKE_DIRECTORY ${OUT_DIR})
-
-        # 1. Always compile to SPIR-V (Everyone needs this as the base)
-        # Output to a temp file or the final destination depending on platform
-        set(SPIRV_BIN ${SHADER_OUTPUT})
         
+        # 1. ALWAYS compile HLSL -> SPIR-V
+        # This ensures Android/PC assets are always up to date.
         add_custom_command(
-            OUTPUT ${SPIRV_BIN}
-            COMMAND ${DXC_EXECUTABLE} -T ${PROFILE} -E ${ENTRYPOINT} -spirv -fspv-target-env=vulkan1.0 -fvk-use-dx-layout -Fo ${SPIRV_BIN} ${SHADER_SOURCE}
-            DEPENDS ${SHADER_SOURCE}
-            COMMENT "Compiling ${SHADER_SOURCE} -> SPIR-V"
-            VERBATIM
+            OUTPUT ${SPV_OUT}
+            COMMAND ${DXC_EXECUTABLE} -T ${PROFILE} -E ${ENTRY} -spirv -fspv-target-env=vulkan1.0 -Fo ${SPV_OUT} ${SOURCE}
+            DEPENDS ${SOURCE}
+            COMMENT "Compiling HLSL -> SPIR-V: ${SOURCE}"
         )
 
-        # 2. If on Apple, Translate SPIR-V -> Metal (MSL)
-        if(APPLE)
-            if(SPIRV_CROSS_EXECUTABLE)
-                add_custom_command(
-                    OUTPUT ${SHADER_OUTPUT}
-                    COMMAND ${SPIRV_CROSS_EXECUTABLE} ${SPIRV_BIN} --msl --output ${SHADER_OUTPUT}
-                    DEPENDS ${SPIRV_BIN}
-                    COMMENT "Translating SPIR-V -> Metal (MSL)"
-                )
-                # Helper target to ensure MSL is built
-                set(FINAL_OUTPUT ${SHADER_OUTPUT})
-            else()
-                message(WARNING "spirv-cross not found! iOS/Mac shaders will not be generated.")
-            endif()
+        # 2. APPLE ONLY: Convert SPIR-V -> MSL -> AIR -> Metallib
+        if(APPLE AND SPIRV_CROSS_EXECUTABLE AND XCRUN_EXECUTABLE)
+            
+            # We build Metal artifacts in the BUILD directory, not source assets.
+            # This keeps your source tree clean.
+            get_filename_component(BASENAME ${SOURCE} NAME_WE)
+            set(MSL_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${BASENAME}.metal")
+            set(AIR_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${BASENAME}.air")
+            set(LIB_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${BASENAME}.metallib")
+            
+            file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+
+	    # Detect which SDK to use (iphoneos, iphonesimulator, or macosx)
+	    if(CMAKE_OSX_SYSROOT)
+    	        set(METAL_SDK ${CMAKE_OSX_SYSROOT})
+	    else()
+    	    	set(METAL_SDK "macosx")
+	    endif()
+
+	    add_custom_command(
+    	    	OUTPUT ${LIB_OUT}
+    	    	# Step A: SPIR-V -> MSL
+    	    	COMMAND ${SPIRV_CROSS_EXECUTABLE} ${SPV_OUT} --msl --output ${MSL_OUT}
+    
+  	    	# Step B: Compile (-c) using the CORRECT SDK
+    	    	COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metal -c ${MSL_OUT} -o ${AIR_OUT}
+    
+    	    	# Step C: Link (metallib) using the CORRECT SDK
+            	COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metallib ${AIR_OUT} -o ${LIB_OUT}
+    
+	    	DEPENDS ${SPV_OUT}
+       	        COMMENT "Building Metal Library (${METAL_SDK}): ${LIB_OUT}"
+	    )
+
+            # Add to Bundle Resources so it copies into Quaternion.app/Contents/Resources/
+            target_sources(${PROJECT_NAME} PRIVATE ${LIB_OUT})
+            set_source_files_properties(${LIB_OUT} PROPERTIES MACOSX_PACKAGE_LOCATION Resources/shaders)
+        
         else()
-            # On Linux/Windows/Android, the SPIR-V is the final output
-            set(FINAL_OUTPUT ${SPIRV_BIN})
+            # NON-APPLE: Ensure the target depends on the SPV generation
+            get_filename_component(SH_TARGET ${SOURCE} NAME_WE)
+            add_custom_target(Shader_${SH_TARGET} DEPENDS ${SPV_OUT})
+            add_dependencies(${PROJECT_NAME} Shader_${SH_TARGET})
         endif()
-
-        # 3. Create a target for this specific shader so the main app can depend on it
-        get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME_WE)
-        add_custom_target(Shader_${SHADER_NAME} DEPENDS ${FINAL_OUTPUT})
-        add_dependencies(${PROJECT_NAME} Shader_${SHADER_NAME})
-
     endif()
 endfunction()
 
-# Register shaders
-# Syntax: compile_shader(SourceFile OutputFile Profile EntryPoint)
-set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
-
-# Shader 1: Basic Compute
-set(COMPUTE_SHADER_SRC "${SHADER_DIR}/BasicCompute.hlsl")
-set(COMPUTE_SHADER_BIN "${SHADER_DIR}/BasicCompute.spv")
-compile_shader(${COMPUTE_SHADER_SRC} ${COMPUTE_SHADER_BIN} cs_6_0 main)
+# --- Register Shaders ---
+# Note: We output .spv to assets/shaders so Android Gradle picks it up.
+compile_shader(
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.hlsl" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv" 
+    cs_6_0 
+    main
+)
