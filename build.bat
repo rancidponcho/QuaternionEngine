@@ -18,5 +18,5 @@ cmake --build . --config Debug
 
 REM 4. Run the app
 echo [Batch] Running Application...
-Debug\main.exe
+Debug\Quaternion.exe
 cd ..

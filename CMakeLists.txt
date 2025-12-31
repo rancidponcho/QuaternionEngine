@@ -65,6 +65,26 @@ else()
     # --- LINUX / WINDOWS ---
     add_executable(${PROJECT_NAME} ${SOURCE_FILES})
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
+    
+    if(WIN32)
+        # 1. Copy SDL3.dll
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3>
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+            COMMENT "Copying SDL3.dll..."
+        )
+
+        # 2. Copy Shaders (Make the directory first, then copy the file)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/BasicCompute.spv"
+            COMMENT "Copying Shaders..."
+        )
+    endif()
+
     if(UNIX)
         target_link_libraries(${PROJECT_NAME} PRIVATE m)
     endif()
@@ -117,18 +137,18 @@ function(compile_shader SOURCE SPV_OUT PROFILE ENTRY)
 	    endif()
 
 	    add_custom_command(
-    	    	OUTPUT ${LIB_OUT}
-    	    	# Step A: SPIR-V -> MSL
-    	    	COMMAND ${SPIRV_CROSS_EXECUTABLE} ${SPV_OUT} --msl --output ${MSL_OUT}
+    	    OUTPUT ${LIB_OUT}
+    	    # Step A: SPIR-V -> MSL
+    	    COMMAND ${SPIRV_CROSS_EXECUTABLE} ${SPV_OUT} --msl --output ${MSL_OUT}
     
   	    	# Step B: Compile (-c) using the CORRECT SDK
-    	    	COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metal -c ${MSL_OUT} -o ${AIR_OUT}
+    	    COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metal -c ${MSL_OUT} -o ${AIR_OUT}
     
-    	    	# Step C: Link (metallib) using the CORRECT SDK
-            	COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metallib ${AIR_OUT} -o ${LIB_OUT}
+    	    # Step C: Link (metallib) using the CORRECT SDK
+            COMMAND ${XCRUN_EXECUTABLE} -sdk ${METAL_SDK} metallib ${AIR_OUT} -o ${LIB_OUT}
     
 	    	DEPENDS ${SPV_OUT}
-       	        COMMENT "Building Metal Library (${METAL_SDK}): ${LIB_OUT}"
+       	    COMMENT "Building Metal Library (${METAL_SDK}): ${LIB_OUT}"
 	    )
 
             # Add to Bundle Resources so it copies into Quaternion.app/Contents/Resources/
