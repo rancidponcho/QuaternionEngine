@@ -1,14 +1,28 @@
-#ifndef RENDERER_H
-#define RENDERER_H
+#ifndef RENDER_RENDERER_H
+#define RENDER_RENDERER_H
 
-#include "../core/engine.h"
-#include "core/input.h"
+/*
+================================================================================
+    Renderer
+    High-level graphics pipeline and scene management.
+================================================================================
+*/
+
+#include "core/engine.h"
+#include <stdbool.h>
+
+// -----------------------------------------------------------------------------
+// Lifecycle
+// -----------------------------------------------------------------------------
 
 bool Renderer_Init(EngineContext* ctx);
 void Renderer_Shutdown(EngineContext* ctx);
 
-void Renderer_Resize(EngineContext* ctx, int winW, int winH);
+// -----------------------------------------------------------------------------
+// Frame & State
+// -----------------------------------------------------------------------------
+
+void Renderer_Resize(EngineContext* ctx, int width, int height);
 void Renderer_Draw(EngineContext* ctx);
 
-#endif 
-
+#endif // RENDER_RENDERER_H

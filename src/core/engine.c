@@ -1,114 +1,110 @@
+/*
+================================================================================
+    Engine Core
+    Manages the SDL3 lifecycle, GPU device context, and windowing.
+================================================================================
+*/
+
 #include "engine.h"
-#include "SDL3/SDL_gpu.h"
-#include "SDL3/SDL_video.h"
 #include "input.h"
 
-#include <stdio.h> // snprintf
+#include "SDL3/SDL.h"
+#include <SDL3/SDL_log.h>
+#include <stdio.h>
 
-/**
- * @brief Maps platform to SDL GPU Backend Format.
- */
-SDL_GPUShaderFormat GetShaderFormat() {
-    #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
-        return SDL_GPU_SHADERFORMAT_METALLIB;
-    #else
-        return SDL_GPU_SHADERFORMAT_SPIRV;
-    #endif
-}
-
-/* ==========================================================================
- * PUBLIC API IMPLEMENTATION
- * ========================================================================== */
+/*
+================================================================================
+    Public API
+================================================================================
+*/
 
 bool Engine_Init(EngineContext *ctx) {
-    
-    // --------------------------------------------------------------------------
-    // HOST SYSTEM INIT (Video Subsystem & Window)
-    // --------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Host System
+    // -------------------------------------------------------------------------
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_Log("CRITICAL: SDL_Init Failed: %s", SDL_GetError());
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init Failed: %s", SDL_GetError());
         return false;
     }
 
+    // Note: On iOS/Android, dimensions are ignored for fullscreen windows.
     ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE);
     if (!ctx->window) {
-        SDL_Log("CRITICAL: Window Creation Failed: %s", SDL_GetError());
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Window Creation Failed: %s", SDL_GetError());
         return false;
     }
 
-    // --------------------------------------------------------------------------
-    // DEVICE INIT (GPU Driver)
-    // --------------------------------------------------------------------------
-    // Requests a GPU context supporting our target shader format.
-    // 'true' enabled debug layers (validation) which is useful during dev.
-    ctx->gpu = SDL_CreateGPUDevice(GetShaderFormat(), true, NULL);
-    if(!ctx->gpu) {
-        SDL_Log("CRITICAL: GPU Device Init Failed: %s", SDL_GetError());
+    // -------------------------------------------------------------------------
+    // GPU Device
+    // -------------------------------------------------------------------------
+    // Debug mode (true) enables validation layers. Disable for release builds.
+    ctx->gpu = SDL_CreateGPUDevice(Engine_GetShaderFormat(), true, NULL);
+    if (!ctx->gpu) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "GPU Device Init Failed: %s", SDL_GetError());
         return false;
     }
 
-    // --------------------------------------------------------------------------
-    // PRESENTATION SETUP (Swapchain)
-    // --------------------------------------------------------------------------
-    // Claims the window for this GPU device, creating the underlying Surface.
+    // -------------------------------------------------------------------------
+    // Presentation
+    // -------------------------------------------------------------------------
     if (!SDL_ClaimWindowForGPUDevice(ctx->gpu, ctx->window)) {
-        SDL_Log("CRITICAL: Failed to claim swapchain: %s", SDL_GetError());
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Swapchain Claim Failed: %s", SDL_GetError());
         return false;
     }
 
-    // Note: To unlock framerate (disable VSync), we would change swapchain params here.
-    // Default is SDL_GPU_PRESENTMODE_VSYNC.
-    // SDL_SetGPUSwapchainParameters(ctx->gpu, ctx->window, SDL_GPU_SWAPCHAIN_COMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE);
-
-    // --------------------------------------------------------------------------
-    // SUBSYSTEM INIT
-    // --------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Subsystems
+    // -------------------------------------------------------------------------
     Input_Init(ctx);
     ctx->lastTime = SDL_GetTicks();
 
-    SDL_Log("SYSTEM: Engine Initialized Successfully (GPU Mode)");
+    SDL_Log("SYSTEM: Engine Initialized (Format: %d)", Engine_GetShaderFormat());
     return true;
 }
 
 void Engine_Shutdown(EngineContext *ctx) {
-    SDL_Log("SYSTEM: Shutting down...");
-    
+    SDL_Log("SYSTEM: Engine Shutdown Initiated");
+
+    if (ctx->drawTexture) {
+        SDL_ReleaseGPUTexture(ctx->gpu, ctx->drawTexture);
+        ctx->drawTexture = NULL;
+    }
+
     if (ctx->gpu) {
         SDL_DestroyGPUDevice(ctx->gpu);
-	ctx->gpu = NULL;
+        ctx->gpu = NULL;
     }
 
     if (ctx->window) {
         SDL_DestroyWindow(ctx->window);
-	ctx->window = NULL;
+        ctx->window = NULL;
     }
-    
+
     SDL_Quit();
 }
 
 void Engine_ResizeTexture(EngineContext *ctx, int w, int h) {
-    // Safety: Don't allocate 0-sized textures (minimized window)
-    if (w <= 0 || h <= 0) return;
+    // Guard: Prevent invalid or zero-sized allocations (e.g., minimized window)
+    if (w <= 0 || h <= 0) {
+        return;
+    }
 
-    // 1. HARDWARE SYNC
-    // We cannot destroy a resource while the GPU Command Processor is potentially
-    // reading/writing to it. We must flush the pipeline and wait for idle.
+    // SYNC: We must flush the GPU pipeline before destroying resources
+    // that might currently be in use by a command buffer.
     SDL_WaitForGPUIdle(ctx->gpu);
 
-    // 2. RELEASE OLD RESOURCE
     if (ctx->drawTexture) {
         SDL_ReleaseGPUTexture(ctx->gpu, ctx->drawTexture);
     }
 
-    // 3. UPDATE STATE
+    // Update State
     ctx->texWidth = w;
     ctx->texHeight = h;
 
-    // 4. ALLOCATE NEW RESOURCE
+    // Allocate storage for the Compute Shader to write into
     SDL_GPUTextureCreateInfo texInfo = {
         .type = SDL_GPU_TEXTURETYPE_2D,
-        // Ensure this matches your pipeline format!
-        .format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
+        .format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT, // High-precision float
         .width = ctx->texWidth,
         .height = ctx->texHeight,
         .layer_count_or_depth = 1,
@@ -119,9 +115,8 @@ void Engine_ResizeTexture(EngineContext *ctx, int w, int h) {
     ctx->drawTexture = SDL_CreateGPUTexture(ctx->gpu, &texInfo);
 
     if (!ctx->drawTexture) {
-        SDL_Log("CRITICAL: Failed to resize VRAM texture.");
-        // In a real embedded system, we might trigger a watchdog or fallback here.
+        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to resize VRAM texture to %dx%d", w, h);
     } else {
-        SDL_Log("SYSTEM: VRAM Resized to %dx%d", w, h);
+        SDL_Log("SYSTEM: VRAM Resized [%dx%d]", w, h);
     }
 }

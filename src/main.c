@@ -1,50 +1,54 @@
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h> // Magic header for Android
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_main.h> // Takes over main() for platform-specific entry (Android/iOS)
+
 #include "core/engine.h"
 #include "core/input.h"
 #include "render/renderer.h"
 
-int main(int argc, char *argv[]) {
-    // Force a log to prove we are alive
-    SDL_Log("DEBUG: === STARTING MAIN ===");
-    
+int main(int argc, char *argv[]) {    
     EngineContext ctx = {0};
 
-    // CHECKPOINT 1
-    SDL_Log("DEBUG: Initializing Engine...");
+    // -------------------------------------------------------------------------
+    // System Initialization
+    // -------------------------------------------------------------------------
     if (!Engine_Init(&ctx)) {
-        SDL_Log("DEBUG: Engine_Init FAILED! Error: %s", SDL_GetError());
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Engine initialization failed: %s", SDL_GetError());
         return 1;
     }
-    SDL_Log("DEBUG: Engine_Init Success.");
 
-    // CHECKPOINT 2
-    SDL_Log("DEBUG: Initializing Renderer...");
     if (!Renderer_Init(&ctx)) {
-        SDL_Log("DEBUG: Renderer_Init FAILED! Error: %s", SDL_GetError());
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Renderer initialization failed: %s", SDL_GetError());
         return 1;
     }
-    SDL_Log("DEBUG: Renderer_Init Success.");
 
-    bool isRunning = true;
-    SDL_Log("DEBUG: Entering Super Loop");
+    // -------------------------------------------------------------------------
+    // Main Loop
+    // -------------------------------------------------------------------------
+    bool running = true;
+    ctx.lastTime = SDL_GetTicks();
 
-    while (isRunning) {
+    while (running) {
+        // Time Step
         Uint64 now = SDL_GetTicks();
         ctx.deltaTime = (now - ctx.lastTime) / 1000.0f;
         ctx.lastTime = now;
 
+        // Process Input
         Input_Poll(&ctx);
         if (ctx.input.quitRequested) {
-            SDL_Log("DEBUG: Quit Requested by Input System");
-            isRunning = false;
+            running = false;
         }
 
+        // Execute Frame
         Renderer_Draw(&ctx);
     }
 
+    // -------------------------------------------------------------------------
+    // Shutdown
+    // -------------------------------------------------------------------------
     Renderer_Shutdown(&ctx);
     Engine_Shutdown(&ctx);
-    SDL_Log("DEBUG: === CLEAN SHUTDOWN ===");
+    
     return 0;
 }

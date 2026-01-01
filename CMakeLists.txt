@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(Quaternion C)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # ==============================================================================
 # 1. GLOBAL CONFIGURATION
 # ==============================================================================

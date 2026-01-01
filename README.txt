@@ -1,119 +1,109 @@
-QUATERNION ENGINE
+================================================================================
+QUATERNION ENGINE                                                    v0.1-init
+================================================================================
 
-A cross-platform C game framework using SDL3 and SDL_GPU.
-Targets: Linux, Windows, macOS, Android, iOS.
+A cross-platform high-performance game framework.
+Written in C. Powered by SDL3 and SDL_GPU.
 
-PROJECT STRUCTURE
+Supported Targets:
+    * Linux (X11/Wayland)
+    * macOS (Metal)
+    * Windows (D3D12/Vulkan)
+    * iOS (Metal)
+    * Android (Vulkan)
 
-- CMakeLists.txt: The master build configuration. Handles platform detection and shader compilation.
-- src/: Shared C source code (Engine lifecycle, Input, Game Logic).
-- assets/shaders/: HLSL shader source files (.hlsl) and compiled binaries (.spv).
-- android/: Android-specific project files (Gradle wrapper & Manifest).
-- external/: Dependency storage (SDL3 is downloaded here automatically).
-- Makefile: Convenience wrapper for Linux/macOS.
-- build.bat: Convenience wrapper for Windows.
+================================================================================
+DIRECTORY LAYOUT
+================================================================================
 
---------------------------------------------------------------------------------
+/src
+    /core       - Lifecycle, Input, Hardware Abstraction (HAL)
+    /render     - Shader pipeline, Compute Dispatch, Resolution Scaling
+/assets
+    /shaders    - HLSL source (.hlsl) and compiled bytecode (.spv)
+/external       - SDL3 (fetched automatically via CMake)
+/ios            - iOS-specific resources (Storyboards, Info.plist)
+/android        - Gradle build system and Manifests
 
+Files:
+CMakeLists.txt  - Master build configuration
+Makefile        - *nix build automation wrapper
+build.bat       - Windows build automation wrapper
+
+================================================================================
 PREREQUISITES
+================================================================================
 
-1. Linux (Debian/Ubuntu)
-   System Tools:
-       sudo apt install build-essential cmake git
+1. COMPILER
+   - GCC / Clang (Linux/macOS)
+   - MSVC (Windows)
+   - CMake 3.22+
 
-   SDL3 Dependencies (Video/Audio/Input):
-       sudo apt install libasound2-dev libpulse-dev libx11-dev libxext-dev \
-       libxrandr-dev libxcursor-dev libxi-dev libxss-dev libwayland-dev \
-       libxkbcommon-dev
+2. SHADER COMPILER
+   - Microsoft DirectX Shader Compiler ('dxc')
+   - REQUIRED for all platforms (compiles HLSL -> SPIR-V).
+   - Linux: Download release binary, add to PATH.
+   - macOS: `brew install vulkan-sdk`
+   - Windows: Included in Vulkan SDK.
 
-   Shader Compiler (DXC):
-       You must install the DirectX Shader Compiler ('dxc') to build shaders.
-       Download the latest release from: https://github.com/microsoft/DirectXShaderCompiler/releases
-       
-       Installation (Example):
-       1. Download the tarball (e.g., linux_dxc_...x86_64.tar.gz).
-       2. Extract it to a folder (e.g., ~/tools/dxc).
-       3. Add the /bin folder to your PATH in ~/.bashrc:
-          export PATH=$PATH:~/path/to/dxc/bin
+3. LIBRARIES (Linux Only)
+   - SDL3 build dependencies:
+     build-essential libasound2-dev libpulse-dev libx11-dev libxext-dev
+     libxrandr-dev libxcursor-dev libxi-dev libxss-dev libwayland-dev
+     libxkbcommon-dev
 
-2. macOS
-   Requires Xcode Command Line Tools:
-       xcode-select --install
+================================================================================
+BUILDING
+================================================================================
 
-   Install CMake and Vulkan SDK (includes 'dxc') via Homebrew:
-       brew install cmake
-       brew install --cask vulkan-sdk
-
-3. Windows
-   - Install Visual Studio Community (Select "Desktop development with C++").
-   - Install CMake (usually included in VS, or install separately).
-   - Install the Vulkan SDK (https://vulkan.lunarg.com/). This includes 'dxc.exe'.
-     Ensure 'dxc' is added to your System PATH during installation.
-
-4. Android
-   - Linux/Mac users: Ensure ANDROID_HOME and NDK_HOME environment variables
-     are set in your shell (e.g., .bashrc).
-   - Windows users: Install Android Studio and set the ANDROID_HOME env var.
-   - Note: Android builds use the NDK's internal tools, but 'dxc' is still
-     useful for verifying shaders locally.
+All build artifacts are output to ./build/ (or ./build_ios/, ./build_android/).
 
 --------------------------------------------------------------------------------
-
-BUILDING & RUNNING
-
---- Linux & macOS (Terminal) ---
-We use a Makefile to handle bootstrapping, shader compilation, and building.
-
-Commands:
-make
-    Compiles shaders (HLSL -> SPIR-V) and the desktop executable (Debug).
-
-make run
-    Compiles and immediately runs the app.
-
-make clean
-    Removes the build/ directory and compiled shader binaries.
-
-make nuke
-    Hard Reset. Deletes build, Android caches, AND the SDL source.
-
-
---- Windows (Command Line) ---
-Run the convenience script from cmd or PowerShell:
-    build.bat
-
-Alternatively: Open the project folder in Visual Studio 2022. It will
-auto-detect CMake. Just press the Green Play button.
+LINUX / MACOS
+--------------------------------------------------------------------------------
+    make            # Compile Debug build
+    make run        # Compile and Run
+    make clean      # Clean build directory
 
 --------------------------------------------------------------------------------
+WINDOWS
+--------------------------------------------------------------------------------
+    build.bat       # Compile and Run
 
-MOBILE DEPLOYMENT
+    Alternatively, open folder in Visual Studio 2022.
 
---- Android ---
-The project uses the Gradle build system, wrapped by our Makefile.
+--------------------------------------------------------------------------------
+IOS
+--------------------------------------------------------------------------------
+    make ios        # Generate Xcode Project and build Debug .app
 
-One-Step Build (Linux/Mac):
-    make android          (Builds Debug APK)
-    make android-release  (Builds Release APK)
+    To install on device:
+    1. open build_ios/Quaternion.xcodeproj
+    2. Select device.
+    3. Cmd+R
 
-Manual Build:
-    cd android
-    ./gradlew assembleDebug
+    NOTE: Requires valid Apple Development Team ID.
+    Set via env var: export APPLE_TEAM_ID="XXXXXXXX"
+    Or edit CMakeLists.txt directly.
 
-Where is the APK?
+--------------------------------------------------------------------------------
+ANDROID
+--------------------------------------------------------------------------------
+    make android    # Build Debug APK
+
+    APK Location:
     android/app/build/outputs/apk/debug/app-debug.apk
 
+================================================================================
+NOTES
+================================================================================
 
---- iOS ---
-iOS builds require generating an Xcode Project via CMake.
+* PAGE SIZES: Android builds enforce 16KB page alignment for Android 15+
+  compatibility.
 
-1. Create an iOS build folder:
-   mkdir build_ios && cd build_ios
+* SHADERS: Engine uses a unified HLSL shader path.
+  - PC/Android: Compiled to SPIR-V.
+  - Apple: Transpiled SPIR-V -> MSL -> Metallib via SPIRV-Cross.
 
-2. Generate the Xcode project:
-   cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS
-
-3. Open the project:
-   open Quaternion.xcodeproj
-
-4. Select your connected iPhone (or Simulator) in Xcode and hit Run.
+* INPUT: Input system uses raw polling for low latency. Events are
+  processed before the render dispatch.

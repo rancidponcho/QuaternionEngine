@@ -1,93 +1,72 @@
 #ifndef CORE_ENGINE_H
 #define CORE_ENGINE_H
 
-/**
- * @file engine.h
- * @brief Global Application State & Hardware Abstraction Layer (HAL) Context.
- *
- * Defines the primary state container (EngineContext) used to bridge the 
- * OS-level windowing system, the GPU device driver, and the application simulation.
- */
+/*
+================================================================================
+    Engine Core
+    Global state container and Hardware Abstraction Layer (HAL).
+================================================================================
+*/
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <stdbool.h>
 
-#include "input.h"
+#include "core/input.h"
 
-/* ==========================================================================
- * DATA STRUCTURES
- * ========================================================================== */
+// -----------------------------------------------------------------------------
+// Context
+// -----------------------------------------------------------------------------
 
-/**
- * @brief Application Context.
- * * Acts as the central hub for all persistent hardware handles.
- * Passed by pointer to nearly all subsystems to avoid global state.
- */
 typedef struct EngineContext {
-    // --- OS / Presentation Layer ---
-    SDL_Window* window;         // Handle to the OS window manager object
+    // System
+    SDL_Window* window;          // Native Window
+    SDL_GPUDevice* gpu;             // Driver Context
     
-    // --- GPU / Driver Layer ---
-    SDL_GPUDevice* gpu;            // Logical connection to the graphics driver
-    SDL_GPUComputePipeline* computePipeline; // Compiled shader microcode (PSO)
-    
-    // --- VRAM Resources ---
-    SDL_GPUTexture* drawTexture;    // Intermediate offscreen texture (UAV/RW)
-    
-    // --- Simulation State ---
-    int             texWidth;       // Internal resolution width
-    int             texHeight;      // Internal resolution height
-    int             dispatchGroupsX;
-    int             dispatchGroupsY;
+    // Pipeline & Resources
+    SDL_GPUComputePipeline* computePipeline; 
+    SDL_GPUTexture* drawTexture;     // Compute write target (UAV)
 
-    // --- Render State ---
-    SDL_Rect viewport;  // The actual destination on screen
+    // Simulation State
+    int                     texWidth;
+    int                     texHeight;
+    int                     dispatchGroupsX;
+    int                     dispatchGroupsY;
     
-    // --- Input & Timing ---
-    InputState      input;          // Current frame's input snapshot
-    Uint64          lastTime;       // High-resolution clock timestamp (ticks)
-    float           deltaTime;      // Frame duration in seconds
+    // Presentation
+    SDL_Rect                viewport;        // Output destination
+
+    // Input & Time
+    InputState              input;
+    Uint64                  lastTime;
+    float                   deltaTime;
 } EngineContext;
 
-/**
- * @brief Helper function to get shader format (.spv vs .msv)
- */
-SDL_GPUShaderFormat GetShaderFormat();
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
 
+/*
+    Engine_GetShaderFormat
+    Resolves the backend format at compile-time (SPIR-V vs MSL).
+    Static inline to avoid function call overhead.
+*/
+static inline SDL_GPUShaderFormat Engine_GetShaderFormat(void) {
+    #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
+        return SDL_GPU_SHADERFORMAT_METALLIB;
+    #else
+        return SDL_GPU_SHADERFORMAT_SPIRV;
+    #endif
+}
 
-/* ==========================================================================
- * PUBLIC API
- * ========================================================================== */
+// -----------------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------------
 
-/**
- * @brief Initializes the low-level hardware abstraction layer.
- * * Performs the following boot sequence:
- * 1. Initializes SDL Video Subsystem.
- * 2. Creates the OS Window.
- * 3. Initializes the GPU Driver (Vulkan/Metal/D3D12).
- * 4. Negotiates the Swapchain (Presentation Surface).
- * 5. Allocates VRAM for offscreen rendering.
- * 6. Compiles/Loads shader pipelines.
- * * @param ctx Pointer to zero-initialized context struct.
- * @return true on successful boot, false on hardware failure.
- */
 bool Engine_Init(EngineContext *ctx);
-
-/**
- * @brief Teardown sequence.
- * * Releases all GPU handles, destroys the window, and unhooks from the driver.
- * Must be called before exiting main() to prevent driver resource leaks.
- */
 void Engine_Shutdown(EngineContext *ctx);
 
-/**
- * @brief Reallocates the internal draw texture to match new dimensions.
- * * BLOCKS EXECUTION: Calls SDL_WaitForGPUIdle() to ensure the GPU isn't
- * using the old texture before destroying it.
- * * @param w New width (must be > 0)
- * * @param h New height (must be > 0)
- */
+// Resizes VRAM texture. Blocks if GPU is busy.
 void Engine_ResizeTexture(EngineContext *ctx, int w, int h);
 
 #endif // CORE_ENGINE_H
