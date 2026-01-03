@@ -17,33 +17,54 @@
 // -----------------------------------------------------------------------------
 // Context
 // -----------------------------------------------------------------------------
-
 typedef struct EngineContext {
-    // System
-    SDL_Window* window;          // Native Window
-    SDL_GPUDevice* gpu;             // Driver Context
+    //
+    // Core Systems
+    //
+    SDL_GPUDevice* gpu;
+    SDL_Window* window;
+
+    //
+    // Lifecycle
+    //
+    bool                    quitRequested;  // Main loop kill switch
+    bool                    isBackground;   // Android: App is hidden/sleeping
+    bool                    hasWindow;      // PC: Window is minimized/lost
+
+    //
+    // Time
+    //
+    struct {
+        float               delta;          // Seconds since last frame
+        double              total;          // Seconds since startup
+        Uint64              lastTick;
+    } time;
+
+    //
+    // Resources & Pipeline
+    //
+    SDL_GPUComputePipeline* computePipeline;
+    SDL_GPUTexture* drawTexture;    // The 1280x720 render target
+
+    //
+    // Resolution
+    //
+    Uint32                  internalW;      // Game logic size (e.g., 1280)
+    Uint32                  internalH;      // Game logic size (e.g., 720)
     
-    // Pipeline & Resources
-    SDL_GPUComputePipeline* computePipeline; 
-    SDL_GPUTexture* drawTexture;     // Compute write target (UAV)
+    Uint32                  outputW;        // OS Window width
+    Uint32                  outputH;        // OS Window height
 
-    // Simulation State
-    int                     texWidth;
-    int                     texHeight;
-    int                     dispatchGroupsX;
-    int                     dispatchGroupsY;
-    
-    // Presentation
-    SDL_Rect                viewport;        // Output destination
+    Uint32                  dispatchX;      // Derived from internalW
+    Uint32                  dispatchY;      // Derived from internalH
 
-    // System State
-    bool hasWindow;
-    bool isBackground;
+    SDL_Rect                viewport;       // Letterbox destination rect
 
-    // Input & Time
+    //
+    // Input
+    //
     InputState              input;
-    Uint64                  lastTime;
-    float                   deltaTime;
+
 } EngineContext;
 
 // -----------------------------------------------------------------------------

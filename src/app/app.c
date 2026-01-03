@@ -84,18 +84,19 @@ bool App_Init(EngineContext *ctx) {
 // -----------------------------------------------------------------------------
 
 void App_Run(EngineContext* ctx) {
-    ctx->lastTime = SDL_GetTicks();
+    ctx->time.lastTick = SDL_GetTicks();
     bool running = true;
 
     while (running) {
         // Time Step
         Uint64 now = SDL_GetTicks();
-        ctx->deltaTime = (now - ctx->lastTime) / 1000.0f;
-        ctx->lastTime = now;
+        ctx->time.delta = (now - ctx->time.lastTick) / 1000.0f;
+        ctx->time.lastTick = now;
+        ctx->time.total += ctx->time.delta;
 
         // The Frame Schedule
         App_ProcessInput(ctx);
-        if (ctx->input.quitRequested) running = false;
+        if (ctx->quitRequested) running = false;
 
         App_HandleLifecycle(ctx);
         App_Update(ctx);

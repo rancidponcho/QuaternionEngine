@@ -21,9 +21,8 @@ void Input_Init(EngineContext* ctx) {
     // Zero out history to prevent startup ghost inputs
     SDL_zeroa(ctx->input.keyboardPrevious);
     
-    ctx->input.quitRequested = false;
-    ctx->input.mouseX = 0.0f;
-    ctx->input.mouseY = 0.0f;
+    ctx->quitRequested = false;
+    ctx->input.mousePos = (Vec2){ 0.0f, 0.0f };
 }
 
 void Input_Poll(EngineContext* ctx) {
@@ -36,8 +35,7 @@ void Input_Poll(EngineContext* ctx) {
                SDL_SCANCODE_COUNT * sizeof(bool));
 
     // Reset frame-specific deltas
-    ctx->input.mouseDeltaX = 0.0f;
-    ctx->input.mouseDeltaY = 0.0f;
+    ctx->input.mouseDelta = (Vec2){ 0.0f, 0.0f };
 
     // -------------------------------------------------------------------------
     // Event Pump
@@ -46,7 +44,7 @@ void Input_Poll(EngineContext* ctx) {
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
             case SDL_EVENT_QUIT:
-                ctx->input.quitRequested = true;
+                ctx->quitRequested = true;
                 break;
 
             case SDL_EVENT_DID_ENTER_BACKGROUND:
@@ -69,10 +67,10 @@ void Input_Poll(EngineContext* ctx) {
                 break;
 
             case SDL_EVENT_MOUSE_MOTION:
-                ctx->input.mouseX = event.motion.x;
-                ctx->input.mouseY = event.motion.y;
-                ctx->input.mouseDeltaX += event.motion.xrel;
-                ctx->input.mouseDeltaY += event.motion.yrel;
+                ctx->input.mousePos.x = event.motion.x;
+                ctx->input.mousePos.y = event.motion.y;
+                ctx->input.mouseDelta.x += event.motion.xrel;
+                ctx->input.mouseDelta.y += event.motion.yrel;
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

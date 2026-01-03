@@ -7,7 +7,7 @@
     Manages keyboard, mouse, and system event state snapshots.
 ================================================================================
 */
-
+#include "core/types.h"
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 
@@ -19,20 +19,21 @@ typedef struct EngineContext EngineContext;
 // -----------------------------------------------------------------------------
 
 typedef struct InputState {
-    // System
-    bool            quitRequested;
+    // Virtual Sticks (normalized)
+    Vec2            axisLeft;
+    Vec2            axisRight;
 
-    // Keyboard (Snapshot for edge detection)
-    const bool* keyboardCurrent;     // Pointer to internal SDL state
-    bool            keyboardPrevious[SDL_SCANCODE_COUNT];
+    // Mouse / Touch
+    Vec2            mousePos;
+    Vec2            mouseDelta;
 
-    // Mouse
-    float           mouseX;
-    float           mouseY;
-    float           mouseDeltaX;
-    float           mouseDeltaY;
+    // Buttons
     bool            mouseLeft;
     bool            mouseRight;
+
+    // Keyboard (Snapshot for edge detection)
+    const bool*     keyboardCurrent;     // Pointer to internal SDL state
+    bool            keyboardPrevious[SDL_SCANCODE_COUNT];
 } InputState;
 
 // -----------------------------------------------------------------------------

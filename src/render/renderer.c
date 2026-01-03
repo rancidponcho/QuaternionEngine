@@ -9,10 +9,13 @@
 */
 
 #include "renderer.h"
+
+#include "SDL3/SDL_gpu.h"
+#include "core/types.h"
 #include <SDL3/SDL_log.h>
 #include <stdio.h>
 
-#define BASE_SHORT_SIDE 9
+#define BASE_SHORT_SIDE 100
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
@@ -59,9 +62,10 @@ static const char* GetShaderExtension(void) {
 // Internal helper for Dispatch calculation
 static void UpdateDispatchGroups(EngineContext* ctx) {
     // Ceiling division to ensure coverage
-    ctx->dispatchGroupsX = (ctx->texWidth + 8 - 1) / 8;
-    ctx->dispatchGroupsY = (ctx->texHeight + 8 - 1) / 8;
+    ctx->dispatchX = (ctx->internalW + 8 - 1) / 8;
+    ctx->dispatchY = (ctx->internalH + 8 - 1) / 8;
 }
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -100,6 +104,7 @@ bool Renderer_Init(EngineContext* ctx) {
         .entrypoint = entryPoint,
         .format = Engine_GetShaderFormat(),
         .num_readonly_storage_textures = 0,
+        .num_uniform_buffers = 1,
         .num_readwrite_storage_textures = 1, // Binding 0
         .threadcount_x = 8,
         .threadcount_y = 8,
@@ -136,6 +141,9 @@ void Renderer_Shutdown(EngineContext* ctx) {
 void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     if (winW <= 0 || winH <= 0) return;
 
+    ctx->outputW = winW;
+    ctx->outputH = winH;
+
     // -------------------------------------------------------------------------
     // Aspect Ratio Logic (Pixel Art Scaling)
     // -------------------------------------------------------------------------
@@ -152,19 +160,19 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     // -------------------------------------------------------------------------
     // Delegate the dirty work to the Engine Core
     // Only resize if the integer grid actually changed
-    if (ctx->texWidth != newTexW || ctx->texHeight != newTexH) {
+    if (ctx->internalW != newTexW || ctx->internalH != newTexH) {
         Engine_ResizeTexture(ctx, newTexW, newTexH);
         
         // Update simulation dispatch groups to match new texture size
-        ctx->dispatchGroupsX = (newTexW + 7) / 8;
-        ctx->dispatchGroupsY = (newTexH + 7) / 8;
+        ctx->dispatchX = (newTexW + 7) / 8;
+        ctx->dispatchY = (newTexH + 7) / 8;
     }
 
     // -------------------------------------------------------------------------
     // Viewport Centering
     // -------------------------------------------------------------------------
-    int finalW = ctx->texWidth * scale;
-    int finalH = ctx->texHeight * scale;
+    int finalW = ctx->internalW * scale;
+    int finalH = ctx->internalH * scale;
     
     ctx->viewport.x = (winW - finalW) / 2;
     ctx->viewport.y = (winH - finalH) / 2;
@@ -181,32 +189,61 @@ bool Renderer_Draw(EngineContext* ctx) {
 
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, ctx->window, &swapchainTex, &w, &h)) {
         SDL_CancelGPUCommandBuffer(cmd);
+        SDL_Delay(100); // Safety valve?
         return false;
     }
 
     if (swapchainTex) {
         // ---------------------------------------------------------------------
-        // Compute Pass (Write to offscreen texture)
+        // Prepare Uniform Buffer
+        // ---------------------------------------------------------------------
+        ShaderUniforms uniforms = {
+            .time = ctx->time.total,
+            .pad0 = 0.0f,
+            // Mouse: Normalize relative to the WINDOW (Output), not the Game
+            .mousePos = { 
+                ctx->input.mousePos.x / (float)ctx->outputW,
+                ctx->input.mousePos.y / (float)ctx->outputH 
+            },
+
+            .resolution = { 
+                (float)ctx->internalW, 
+                (float)ctx->internalH 
+            },
+            .pad1 = 0.0f
+        };
+
+
+        // ---------------------------------------------------------------------
+        // Compute Pass
         // ---------------------------------------------------------------------
         SDL_GPUStorageTextureReadWriteBinding storageBinding = {
             .texture = ctx->drawTexture, 
             .mip_level = 0, 
             .layer = 0, 
-            .cycle = false
+            .cycle = true
         };
 
-        SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(cmd, &storageBinding, 1, NULL, 0);
+        SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(
+            cmd,
+            &storageBinding,
+            1,
+            NULL,
+            0
+        );
+
         SDL_BindGPUComputePipeline(computePass, ctx->computePipeline);
-        SDL_DispatchGPUCompute(computePass, ctx->dispatchGroupsX, ctx->dispatchGroupsY, 1);
+        SDL_PushGPUComputeUniformData(cmd, 0, &uniforms, sizeof(uniforms));
+        SDL_DispatchGPUCompute(computePass, ctx->dispatchX, ctx->dispatchY, 1);
         SDL_EndGPUComputePass(computePass);
 
         // ---------------------------------------------------------------------
-        // Blit Pass (Scale to Swapchain)
+        // Blit Pass (Scale Internal -> Window)
         // ---------------------------------------------------------------------
         SDL_GPUBlitInfo blitInfo = {
             .source.texture = ctx->drawTexture,
-            .source.w = ctx->texWidth,
-            .source.h = ctx->texHeight,
+            .source.w = ctx->internalW,
+            .source.h = ctx->internalH,
 
             .destination.texture = swapchainTex,
             .destination.x = ctx->viewport.x,

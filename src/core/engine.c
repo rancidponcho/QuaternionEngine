@@ -59,7 +59,7 @@ bool Engine_Init(EngineContext *ctx) {
     // Subsystems
     // -------------------------------------------------------------------------
     Input_Init(ctx);
-    ctx->lastTime = SDL_GetTicks();
+    ctx->time.lastTick = SDL_GetTicks();
 
     SDL_Log("SYSTEM: Engine Initialized (Format: %d)", Engine_GetShaderFormat());
     return true;
@@ -101,15 +101,15 @@ void Engine_ResizeTexture(EngineContext *ctx, int w, int h) {
     }
 
     // Update State
-    ctx->texWidth = w;
-    ctx->texHeight = h;
+    ctx->internalW = w;
+    ctx->internalH = h;
 
     // Allocate storage for the Compute Shader to write into
     SDL_GPUTextureCreateInfo texInfo = {
         .type = SDL_GPU_TEXTURETYPE_2D,
         .format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT, // High-precision float
-        .width = ctx->texWidth,
-        .height = ctx->texHeight,
+        .width = ctx->internalW,
+        .height = ctx->internalH,
         .layer_count_or_depth = 1,
         .num_levels = 1,
         .usage = SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE | SDL_GPU_TEXTUREUSAGE_SAMPLER
