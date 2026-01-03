@@ -36,6 +36,10 @@ typedef struct EngineContext {
     // Presentation
     SDL_Rect                viewport;        // Output destination
 
+    // System State
+    bool hasWindow;
+    bool isBackground;
+
     // Input & Time
     InputState              input;
     Uint64                  lastTime;
@@ -63,10 +67,10 @@ static inline SDL_GPUShaderFormat Engine_GetShaderFormat(void) {
 // Public API
 // -----------------------------------------------------------------------------
 
-bool Engine_Init(EngineContext *ctx);
-void Engine_Shutdown(EngineContext *ctx);
+bool Engine_Init(EngineContext* ctx);
+void Engine_Shutdown(EngineContext* ctx);
 
 // Resizes VRAM texture. Blocks if GPU is busy.
-void Engine_ResizeTexture(EngineContext *ctx, int w, int h);
+void Engine_ResizeTexture(EngineContext* ctx, int w, int h);
 
 #endif // CORE_ENGINE_H

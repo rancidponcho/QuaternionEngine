@@ -49,6 +49,21 @@ void Input_Poll(EngineContext* ctx) {
                 ctx->input.quitRequested = true;
                 break;
 
+            case SDL_EVENT_DID_ENTER_BACKGROUND:
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                if (ctx->hasWindow) {
+                    SDL_WaitForGPUIdle(ctx->gpu);
+                    SDL_ReleaseWindowFromGPUDevice(ctx->gpu, ctx->window);
+                    ctx->hasWindow = false;
+                }
+                ctx->isBackground = true;
+                break;
+
+            case SDL_EVENT_WILL_ENTER_FOREGROUND:
+            case SDL_EVENT_WINDOW_RESTORED:
+                ctx->isBackground = false;
+                break;
+
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 Renderer_Resize(ctx, event.window.data1, event.window.data2);
                 break;

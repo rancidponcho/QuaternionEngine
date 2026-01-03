@@ -6,6 +6,7 @@
 */
 
 #include "engine.h"
+#include "SDL3/SDL_gpu.h"
 #include "input.h"
 
 #include "SDL3/SDL.h"
@@ -51,6 +52,8 @@ bool Engine_Init(EngineContext *ctx) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Swapchain Claim Failed: %s", SDL_GetError());
         return false;
     }
+
+    ctx->hasWindow = true;
 
     // -------------------------------------------------------------------------
     // Subsystems

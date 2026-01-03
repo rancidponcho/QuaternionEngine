@@ -23,6 +23,6 @@ void Renderer_Shutdown(EngineContext* ctx);
 // -----------------------------------------------------------------------------
 
 void Renderer_Resize(EngineContext* ctx, int width, int height);
-void Renderer_Draw(EngineContext* ctx);
+bool Renderer_Draw(EngineContext* ctx);
 
 #endif // RENDER_RENDERER_H

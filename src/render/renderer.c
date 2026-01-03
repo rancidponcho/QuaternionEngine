@@ -172,16 +172,16 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     ctx->viewport.h = finalH;
 }
 
-void Renderer_Draw(EngineContext* ctx) {
+bool Renderer_Draw(EngineContext* ctx) {
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(ctx->gpu);
-    if (!cmd) return; 
+    if (!cmd) return false; 
 
     SDL_GPUTexture* swapchainTex;
     Uint32 w, h;
 
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, ctx->window, &swapchainTex, &w, &h)) {
         SDL_CancelGPUCommandBuffer(cmd);
-        return;
+        return false;
     }
 
     if (swapchainTex) {
@@ -223,4 +223,5 @@ void Renderer_Draw(EngineContext* ctx) {
     }
 
     SDL_SubmitGPUCommandBuffer(cmd);
+    return true;
 }
