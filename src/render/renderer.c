@@ -15,7 +15,7 @@
 #include <SDL3/SDL_log.h>
 #include <stdio.h>
 
-#define BASE_SHORT_SIDE 100
+#define BASE_SHORT_SIDE 1080
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
@@ -66,36 +66,27 @@ static void UpdateDispatchGroups(EngineContext* ctx) {
     ctx->dispatchY = (ctx->internalH + 8 - 1) / 8;
 }
 
-// -----------------------------------------------------------------------------
-// Public API
-// -----------------------------------------------------------------------------
-
-bool Renderer_Init(EngineContext* ctx) {
-    // -------------------------------------------------------------------------
+// Pipeline ititializer (Also used for hotloading)
+static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
     // Shader Path Resolution
-    // -------------------------------------------------------------------------
     char shaderPath[256];
     const char* ext = GetShaderExtension();
     const char* basePath = SDL_GetBasePath();
 
     if (basePath) {
         // PC/Mac/iOS: Assets are in a specific Resources/bin folder
-        snprintf(shaderPath, sizeof(shaderPath), "%sshaders/BasicCompute.%s", basePath, ext);
+        snprintf(shaderPath, sizeof(shaderPath), "%sassets/shaders/BasicCompute.%s", basePath, ext);
     } else {
         // Android: Assets are relative to the APK root
         snprintf(shaderPath, sizeof(shaderPath), "shaders/BasicCompute.%s", ext);
     }
 
-    SDL_Log("RENDER: Loading Shader: %s", shaderPath);
-
-    // -------------------------------------------------------------------------
     // Pipeline Creation
-    // -------------------------------------------------------------------------
     size_t codeSize;
     void* code = LoadFile(shaderPath, &codeSize);
     if (!code) return false;
 
-    // Metal (via SPIRV-Cross) usually renames main -> main0
+    // Metal (via SPIRV-Cross) renames main -> main0
     const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
 
     SDL_GPUComputePipelineCreateInfo pipelineInfo = {
@@ -111,17 +102,24 @@ bool Renderer_Init(EngineContext* ctx) {
         .threadcount_z = 1
     };
 
-    ctx->computePipeline = SDL_CreateGPUComputePipeline(ctx->gpu, &pipelineInfo);
+    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(ctx->gpu, &pipelineInfo);
     SDL_free(code);
+    
+    return pipeline;
+}
 
+// -----------------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------------
+
+bool Renderer_Init(EngineContext* ctx) {
+    ctx->computePipeline = _CreateComputePipeline(ctx);
     if (!ctx->computePipeline) {
         SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Pipeline Creation Failed: %s", SDL_GetError());
         return false;
     }
 
-    // -------------------------------------------------------------------------
     // Initial Resize
-    // -------------------------------------------------------------------------
     int w, h;
     SDL_GetWindowSizeInPixels(ctx->window, &w, &h);
     Renderer_Resize(ctx, w, h);
@@ -248,7 +246,7 @@ bool Renderer_Draw(EngineContext* ctx) {
             .destination.texture = swapchainTex,
             .destination.x = ctx->viewport.x,
             .destination.y = ctx->viewport.y,
-            .destination.w = ctx->viewport.w, 
+            .destination.w = ctx->viewport.w,
             .destination.h = ctx->viewport.h,
 
             .load_op = SDL_GPU_LOADOP_CLEAR,
@@ -261,4 +259,18 @@ bool Renderer_Draw(EngineContext* ctx) {
 
     SDL_SubmitGPUCommandBuffer(cmd);
     return true;
+}
+
+void Renderer_ReloadShader(EngineContext *ctx) {
+    SDL_WaitForGPUIdle(ctx->gpu);
+
+    SDL_GPUComputePipeline* newPipeline = _CreateComputePipeline(ctx);
+
+    if (newPipeline) {
+        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->computePipeline);
+        ctx->computePipeline = newPipeline;
+        SDL_Log("RENDER: Shader Hot-Reloaded.");
+    } else {
+        SDL_Log("RENDER: Hot-reload failed.");
+    }
 }

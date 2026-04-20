@@ -44,7 +44,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/SDL ${CMAKE_CURRENT_BINARY
 # ==============================================================================
 # 2. TARGET DEFINITION
 # ==============================================================================
-file(GLOB_RECURSE SOURCE_FILES "src/*.c")
+set(SOURCE_FILES
+    "src/main.c"
+    "src/app/app.c"
+    "src/core/engine.c"
+    "src/core/input.c"
+    "src/core/hotload.c"
+    "src/render/renderer.c"
+)
 
 # ------------------------------------------------------------------------------
 # Platform: Android
@@ -138,7 +145,7 @@ else()
     if(WIN32 OR (UNIX AND NOT APPLE))
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/BasicCompute.spv"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets/shaders/BasicCompute.spv"
             COMMENT "Deploying Shaders"
         )
     endif()
@@ -209,7 +216,7 @@ endfunction()
 
 # [cite_start]Asset: BasicCompute.hlsl [cite: 24]
 compile_shader(
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.hlsl" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/BasicCompute.hlsl" 
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/BasicCompute.spv" 
     cs_6_0 
     main

@@ -1,12 +1,13 @@
 /*
 ================================================================================
-    Input System Implementation
+    Input System
 ================================================================================
 */
 
 #include "core/input.h"
 #include "core/engine.h"
 #include "render/renderer.h"
+#include "core/hotload.h"
 
 #include <SDL3/SDL.h>
 
@@ -46,7 +47,7 @@ void Input_Poll(EngineContext* ctx) {
             case SDL_EVENT_QUIT:
                 ctx->quitRequested = true;
                 break;
-
+            // Minimization & sleep
             case SDL_EVENT_DID_ENTER_BACKGROUND:
             case SDL_EVENT_WINDOW_MINIMIZED:
                 if (ctx->hasWindow) {
@@ -62,10 +63,12 @@ void Input_Poll(EngineContext* ctx) {
                 ctx->isBackground = false;
                 break;
 
+            // Resizing
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 Renderer_Resize(ctx, event.window.data1, event.window.data2);
                 break;
 
+            // Mouse
             case SDL_EVENT_MOUSE_MOTION:
                 ctx->input.mousePos.x = event.motion.x;
                 ctx->input.mousePos.y = event.motion.y;
@@ -81,6 +84,15 @@ void Input_Poll(EngineContext* ctx) {
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (event.button.button == SDL_BUTTON_LEFT)  ctx->input.mouseLeft = false;
                 if (event.button.button == SDL_BUTTON_RIGHT) ctx->input.mouseRight = false;
+                break;
+
+            // Hotloading
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.scancode == SDL_SCANCODE_F5) {
+                    if(Hotload_RecompileShader()) {
+                        Renderer_ReloadShader(ctx);
+                    }
+                }
                 break;
         }
     }

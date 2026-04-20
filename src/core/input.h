@@ -7,7 +7,7 @@
     Manages keyboard, mouse, and system event state snapshots.
 ================================================================================
 */
-#include "core/types.h"
+#include "math/vec.h"
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 

@@ -29,7 +29,7 @@ bool Engine_Init(EngineContext *ctx) {
     }
 
     // Note: On iOS/Android, dimensions are ignored for fullscreen windows.
-    ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE);
+    ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, /*SDL_WINDOW_FULLSCREEN |*/ SDL_WINDOW_RESIZABLE);
     if (!ctx->window) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Window Creation Failed: %s", SDL_GetError());
         return false;

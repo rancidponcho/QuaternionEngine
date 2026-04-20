@@ -38,19 +38,6 @@ static void App_HandleLifecycle(EngineContext* ctx) {
     }
 }
 
-static void App_ProcessInput(EngineContext* ctx) {
-    Input_Poll(ctx);
-    // Consider adding Input_ProcessHotkeys(ctx)...
-}
-
-static void App_Update(EngineContext* ctx) {
-    if (ctx->isBackground) return;
-
-    // Network_Update(ctx);
-    // Physics_Step(ctx);
-    // World_UpdateEntities(ctx);
-}
-
 static void App_Render(EngineContext* ctx) {
     // Only draw on valid window
     if (!ctx->hasWindow || ctx->isBackground) return;
@@ -95,11 +82,10 @@ void App_Run(EngineContext* ctx) {
         ctx->time.total += ctx->time.delta;
 
         // The Frame Schedule
-        App_ProcessInput(ctx);
+        Input_Poll(ctx);
         if (ctx->quitRequested) running = false;
 
         App_HandleLifecycle(ctx);
-        App_Update(ctx);
         App_Render(ctx);
     }
 }

@@ -79,6 +79,18 @@ android:
 	cd $(ANDROID_DIR) && ./gradlew assembleDebug
 
 # ------------------------------------------------------------------------------
+# RELEASE (Optimized Desktop Build)
+# ------------------------------------------------------------------------------
+release: bootstrap
+	@mkdir -p $(BUILD_DIR)_release
+	@if [ ! -f $(BUILD_DIR)_release/CMakeCache.txt ]; then \
+		echo "--- Configuring Release ---"; \
+		cd $(BUILD_DIR)_release && cmake -DCMAKE_BUILD_TYPE=Release ..; \
+	fi
+	@echo "--- Building Release ---"
+	cd $(BUILD_DIR)_release && cmake --build . --config Release
+
+# ------------------------------------------------------------------------------
 # UTILITIES
 # ------------------------------------------------------------------------------
 # Nuke everything to force a full re-config
