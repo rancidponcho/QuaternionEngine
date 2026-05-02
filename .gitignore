@@ -69,7 +69,7 @@ out/
 *.xcuserstate
 xcuserdata/
 
-# --- VS Code (Optional, strictly personal prefs) ---
+# --- VS Code ---
 .vscode/
 
 # --- CMake ---
@@ -77,10 +77,13 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
-# EXCEPTION: Do NOT ignore our custom root Makefile
+# Do NOT ignore the custom root Makefile
 !Makefile
 CTestTestfile.cmake
 
 # --- Clangd / LSP / Editors ---
 .cache/
 compile_commands.json
+
+# --- VIM ---
+*.swp
