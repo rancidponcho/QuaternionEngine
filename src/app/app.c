@@ -57,10 +57,6 @@ bool App_Init(EngineContext *ctx) {
         return false;
     }
 
-    if (!Renderer_Init(ctx)) {
-        return false;
-    }
-
     // Network, Audio, etc...
 
     return true;

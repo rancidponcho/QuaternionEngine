@@ -1,0 +1,3 @@
+Fonts are stored in an 8 bit/pixel atlas.
+
+Weighing the memory savings of bitpacking and unpacking at runtime.

@@ -3,28 +3,28 @@
     Renderer
     Handles the high-level graphics pipeline:
     - Shader loading & compilation
-    - Resolution scaling (720p logic)
+    - Resolution scaling
     - Compute Dispatch & Blitting
 ================================================================================
 */
 
 #include "renderer.h"
 
+#include <SDL3/SDL_log.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include "SDL3/SDL_error.h"
 #include "SDL3/SDL_gpu.h"
 #include "core/types.h"
-#include <SDL3/SDL_log.h>
-#include <stdio.h>
+#include "core/engine.h"
 
-#define BASE_SHORT_SIDE 1080
+#define BASE_SHORT_SIDE 128
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
 // -----------------------------------------------------------------------------
 
-/*
-    LoadFile
-    Reads raw binary assets (SPIR-V / Metallib) from disk.
-*/
+// Reads raw binary assets (SPIR-V / Metallib) from disk.
 static void* LoadFile(const char* path, size_t* outSize) {
     SDL_IOStream* io = SDL_IOFromFile(path, "rb");
     if (!io) {
@@ -47,10 +47,7 @@ static void* LoadFile(const char* path, size_t* outSize) {
     return data;
 }
 
-/*
-    GetShaderExtension
-    Returns "metallib" (Apple) or "spv" (Vulkan/Generic) for file paths.
-*/
+// Returns "metallib" (Apple) or "spv" (Vulkan/Generic) for file paths.
 static const char* GetShaderExtension(void) {
     #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
         return "metallib";
@@ -59,15 +56,8 @@ static const char* GetShaderExtension(void) {
     #endif
 }
 
-// Internal helper for Dispatch calculation
-static void UpdateDispatchGroups(EngineContext* ctx) {
-    // Ceiling division to ensure coverage
-    ctx->dispatchX = (ctx->internalW + 8 - 1) / 8;
-    ctx->dispatchY = (ctx->internalH + 8 - 1) / 8;
-}
-
 // Pipeline ititializer (Also used for hotloading)
-static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
+static SDL_GPUComputePipeline* _CreateComputePipeline(SDL_GPUDevice* gpu) {
     // Shader Path Resolution
     char shaderPath[256];
     const char* ext = GetShaderExtension();
@@ -84,7 +74,7 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
     // Pipeline Creation
     size_t codeSize;
     void* code = LoadFile(shaderPath, &codeSize);
-    if (!code) return false;
+    if (!code) return NULL;
 
     // Metal (via SPIRV-Cross) renames main -> main0
     const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
@@ -94,6 +84,7 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
         .code_size = codeSize,
         .entrypoint = entryPoint,
         .format = Engine_GetShaderFormat(),
+
         .num_readonly_storage_textures = 0,
         .num_uniform_buffers = 1,
         .num_readwrite_storage_textures = 1, // Binding 0
@@ -102,9 +93,51 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
         .threadcount_z = 1
     };
 
-    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(ctx->gpu, &pipelineInfo);
+    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
     SDL_free(code);
     
+    return pipeline;
+}
+
+static SDL_GPUComputePipeline* _CreateTextOverlayPipeline(SDL_GPUDevice *gpu) {
+    char shaderPath[256];
+    const char* ext = GetShaderExtension();
+    const char* basePath = SDL_GetBasePath();
+
+    if (basePath) {
+        snprintf(shaderPath, sizeof(shaderPath), "%sassets/shaders/TextOverlayCompute.%s", basePath, ext);
+    } else {
+        snprintf(shaderPath, sizeof(shaderPath), "shaders/TextOverlayCompute.%s", ext);
+    }
+    
+    size_t codeSize = 0;
+    void* code = LoadFile(shaderPath, &codeSize);
+    if (!code) return NULL;
+
+    const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
+
+    SDL_GPUComputePipelineCreateInfo pipelineInfo = {
+        .code = code,
+        .code_size = codeSize,
+        .entrypoint = entryPoint,
+        .format = Engine_GetShaderFormat(),
+
+        .num_samplers = 1,
+        .num_readonly_storage_textures = 0,
+        .num_readonly_storage_buffers = 0,
+        .num_readwrite_storage_textures = 1,
+        .num_readwrite_storage_buffers = 0,
+        .num_uniform_buffers = 0,
+
+        .threadcount_x = 8,
+        .threadcount_y = 8,
+        .threadcount_z = 1,
+        .props = 0
+    };
+
+    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
+    SDL_free(code);
+
     return pipeline;
 }
 
@@ -113,9 +146,40 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(EngineContext* ctx) {
 // -----------------------------------------------------------------------------
 
 bool Renderer_Init(EngineContext* ctx) {
-    ctx->computePipeline = _CreateComputePipeline(ctx);
-    if (!ctx->computePipeline) {
+    // Create pipelines
+    ctx->renderer.computePipeline = _CreateComputePipeline(ctx->gpu);
+    if (!ctx->renderer.computePipeline) {
         SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Pipeline Creation Failed: %s", SDL_GetError());
+        return false;
+    }
+    
+    ctx->renderer.textOverlayPipeline = _CreateTextOverlayPipeline(ctx->gpu);
+    if (!ctx->renderer.textOverlayPipeline) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Text overlay pipeline creation failed: %s", SDL_GetError());
+        return false;
+    }
+    
+    // Sampler for reading font atlas in GPU memory
+    SDL_GPUSamplerCreateInfo samplerInfo = {
+        .min_filter = SDL_GPU_FILTER_NEAREST,
+        .mag_filter = SDL_GPU_FILTER_NEAREST,
+        .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+        .address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .mip_lod_bias = 0.0f,
+        .max_anisotropy = 1.0f,
+        .compare_op = SDL_GPU_COMPAREOP_NEVER,
+        .min_lod = 0.0f,
+        .max_lod = 0.0f,
+        .enable_anisotropy = false,
+        .enable_compare = false,
+        .props = 0
+    };
+
+    ctx->renderer.fontSampler = SDL_CreateGPUSampler(ctx->gpu, &samplerInfo);
+    if (!ctx->renderer.fontSampler) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Font sampler creation failed: %s", SDL_GetError());
         return false;
     }
 
@@ -130,22 +194,42 @@ bool Renderer_Init(EngineContext* ctx) {
 void Renderer_Shutdown(EngineContext* ctx) {
     SDL_WaitForGPUIdle(ctx->gpu);
 
-    if (ctx->computePipeline) {
-        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->computePipeline);
-        ctx->computePipeline = NULL;
+    if (ctx->renderer.computePipeline) {
+        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->renderer.computePipeline);
+        ctx->renderer.computePipeline = NULL;
+    }
+    if (ctx->renderer.textOverlayPipeline) {
+        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->renderer.textOverlayPipeline);
+        ctx->renderer.textOverlayPipeline = NULL;
+    }
+    if (ctx->renderer.drawTexture) {
+        SDL_ReleaseGPUTexture(ctx->gpu, ctx->renderer.drawTexture);
+        ctx->renderer.drawTexture = NULL;
+    }    
+    if (ctx->renderer.gpuTextboxBuffer) {
+        SDL_ReleaseGPUTexture(ctx->gpu, ctx->renderer.gpuTextboxBuffer);
+        ctx->renderer.gpuTextboxBuffer = NULL;
+    }
+    if (ctx->renderer.fontSampler) {
+        SDL_ReleaseGPUSampler(ctx->gpu, ctx->renderer.fontSampler);
+        ctx->renderer.fontSampler = NULL;
+    }
+    if (ctx->renderer.gpuTextBuffer) {
+        SDL_ReleaseGPUBuffer(ctx->gpu, ctx->renderer.gpuTextBuffer);
+        ctx->renderer.gpuTextBuffer = NULL;
     }
 }
 
 void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     if (winW <= 0 || winH <= 0) return;
 
-    ctx->outputW = winW;
-    ctx->outputH = winH;
+    ctx->renderer.outputW = winW;
+    ctx->renderer.outputH = winH;
 
     // -------------------------------------------------------------------------
     // Aspect Ratio Logic (Pixel Art Scaling)
     // -------------------------------------------------------------------------
-    // Lock the shortest side to 720p, calculate integer scale.
+    // Lock the shortest side, calculate integer scale.
     int minDim = (winW < winH) ? winW : winH;
     int scale = minDim / BASE_SHORT_SIDE;
     if (scale < 1) scale = 1;
@@ -156,26 +240,50 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     // -------------------------------------------------------------------------
     // Reallocation
     // -------------------------------------------------------------------------
-    // Delegate the dirty work to the Engine Core
-    // Only resize if the integer grid actually changed
-    if (ctx->internalW != newTexW || ctx->internalH != newTexH) {
-        Engine_ResizeTexture(ctx, newTexW, newTexH);
+    if (ctx->renderer.internalW != newTexW || ctx->renderer.internalH != newTexH) {
+       // Engine_ResizeTexture(ctx, newTexW, newTexH);
+        SDL_WaitForGPUIdle(ctx->gpu);
+
+        if (ctx->renderer.drawTexture) {
+            SDL_ReleaseGPUTexture(ctx->gpu, ctx->renderer.drawTexture);
+        }
+
+        ctx->renderer.internalW = newTexW;
+        ctx->renderer.internalH = newTexH;
         
+        SDL_GPUTextureCreateInfo tex_info = {
+            .type = SDL_GPU_TEXTURETYPE_2D,
+            .format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
+            .width = ctx->renderer.internalW,
+            .height = ctx->renderer.internalH,
+            .layer_count_or_depth = 1,
+            .num_levels = 1,
+            .sample_count = SDL_GPU_SAMPLECOUNT_1,
+            .usage = SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+            .props = 0
+        };
+
+        ctx->renderer.drawTexture = SDL_CreateGPUTexture(ctx->gpu, &tex_info);
+
+        if (!ctx->renderer.drawTexture) {
+            SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to resize VRAM texture to %dx%d", newTexW, newTexH);
+        } else {
+            SDL_Log("System: VRAM Resized [%dx%d]", newTexW, newTexH);
+        }        
+            
         // Update simulation dispatch groups to match new texture size
-        ctx->dispatchX = (newTexW + 7) / 8;
-        ctx->dispatchY = (newTexH + 7) / 8;
+        ctx->renderer.dispatchX = (newTexW + 7) / 8;
+        ctx->renderer.dispatchY = (newTexH + 7) / 8;
     }
 
-    // -------------------------------------------------------------------------
-    // Viewport Centering
-    // -------------------------------------------------------------------------
-    int finalW = ctx->internalW * scale;
-    int finalH = ctx->internalH * scale;
+    // Viewport centering
+    int finalW = ctx->renderer.internalW * scale;
+    int finalH = ctx->renderer.internalH * scale;
     
-    ctx->viewport.x = (winW - finalW) / 2;
-    ctx->viewport.y = (winH - finalH) / 2;
-    ctx->viewport.w = finalW;
-    ctx->viewport.h = finalH;
+    ctx->renderer.viewport.x = (winW - finalW) / 2;
+    ctx->renderer.viewport.y = (winH - finalH) / 2;
+    ctx->renderer.viewport.w = finalW;
+    ctx->renderer.viewport.h = finalH;
 }
 
 bool Renderer_Draw(EngineContext* ctx) {
@@ -192,6 +300,13 @@ bool Renderer_Draw(EngineContext* ctx) {
     }
 
     if (swapchainTex) {
+        SDL_GPUStorageTextureReadWriteBinding storageBinding = {
+            .texture = ctx->renderer.drawTexture, 
+            .mip_level = 0, 
+            .layer = 0, 
+            .cycle = false
+        };
+
         // ---------------------------------------------------------------------
         // Prepare Uniform Buffer
         // ---------------------------------------------------------------------
@@ -200,28 +315,21 @@ bool Renderer_Draw(EngineContext* ctx) {
             .pad0 = 0.0f,
             // Mouse: Normalize relative to the WINDOW (Output), not the Game
             .mousePos = { 
-                ctx->input.mousePos.x / (float)ctx->outputW,
-                ctx->input.mousePos.y / (float)ctx->outputH 
+                ctx->input.mousePos.x / (float)ctx->renderer.outputW,
+                ctx->input.mousePos.y / (float)ctx->renderer.outputH 
             },
 
             .resolution = { 
-                (float)ctx->internalW, 
-                (float)ctx->internalH 
+                (float)ctx->renderer.internalW, 
+                (float)ctx->renderer.internalH 
             },
             .pad1 = 0.0f
         };
 
 
         // ---------------------------------------------------------------------
-        // Compute Pass
+        // Base Compute Pass
         // ---------------------------------------------------------------------
-        SDL_GPUStorageTextureReadWriteBinding storageBinding = {
-            .texture = ctx->drawTexture, 
-            .mip_level = 0, 
-            .layer = 0, 
-            .cycle = true
-        };
-
         SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(
             cmd,
             &storageBinding,
@@ -230,24 +338,47 @@ bool Renderer_Draw(EngineContext* ctx) {
             0
         );
 
-        SDL_BindGPUComputePipeline(computePass, ctx->computePipeline);
+        SDL_BindGPUComputePipeline(computePass, ctx->renderer.computePipeline);
         SDL_PushGPUComputeUniformData(cmd, 0, &uniforms, sizeof(uniforms));
-        SDL_DispatchGPUCompute(computePass, ctx->dispatchX, ctx->dispatchY, 1);
+        SDL_DispatchGPUCompute(computePass, ctx->renderer.dispatchX, ctx->renderer.dispatchY, 1);
         SDL_EndGPUComputePass(computePass);
+
+        // ---------------------------------------------------------------------
+        // Text Overlay Pass
+        // ---------------------------------------------------------------------
+        SDL_GPUComputePass* textPass = SDL_BeginGPUComputePass(
+            cmd,
+            &storageBinding,
+            1,
+            NULL,
+            0
+            );
+
+        SDL_GPUTextureSamplerBinding fontBinding = {
+            .texture = ctx->assets.defaultFont.atlas,
+            .sampler = ctx->renderer.fontSampler
+        };
+        
+        SDL_BindGPUComputePipeline(textPass, ctx->renderer.textOverlayPipeline);
+        SDL_BindGPUComputeSamplers(textPass, 0, &fontBinding, 1);
+        /* PUSH UNIFORMS HERE */
+        SDL_DispatchGPUCompute(textPass, ctx->renderer.dispatchX, ctx->renderer.dispatchY, 1);
+        SDL_EndGPUComputePass(textPass);
+
 
         // ---------------------------------------------------------------------
         // Blit Pass (Scale Internal -> Window)
         // ---------------------------------------------------------------------
         SDL_GPUBlitInfo blitInfo = {
-            .source.texture = ctx->drawTexture,
-            .source.w = ctx->internalW,
-            .source.h = ctx->internalH,
+            .source.texture = ctx->renderer.drawTexture,
+            .source.w = ctx->renderer.internalW,
+            .source.h = ctx->renderer.internalH,
 
             .destination.texture = swapchainTex,
-            .destination.x = ctx->viewport.x,
-            .destination.y = ctx->viewport.y,
-            .destination.w = ctx->viewport.w,
-            .destination.h = ctx->viewport.h,
+            .destination.x = ctx->renderer.viewport.x,
+            .destination.y = ctx->renderer.viewport.y,
+            .destination.w = ctx->renderer.viewport.w,
+            .destination.h = ctx->renderer.viewport.h,
 
             .load_op = SDL_GPU_LOADOP_CLEAR,
             .clear_color = {0, 0, 0, 1}, // Letterbox color
@@ -264,11 +395,11 @@ bool Renderer_Draw(EngineContext* ctx) {
 void Renderer_ReloadShader(EngineContext *ctx) {
     SDL_WaitForGPUIdle(ctx->gpu);
 
-    SDL_GPUComputePipeline* newPipeline = _CreateComputePipeline(ctx);
+    SDL_GPUComputePipeline* newPipeline = _CreateComputePipeline(ctx->gpu);
 
     if (newPipeline) {
-        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->computePipeline);
-        ctx->computePipeline = newPipeline;
+        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->renderer.computePipeline);
+        ctx->renderer.computePipeline = newPipeline;
         SDL_Log("RENDER: Shader Hot-Reloaded.");
     } else {
         SDL_Log("RENDER: Hot-reload failed.");

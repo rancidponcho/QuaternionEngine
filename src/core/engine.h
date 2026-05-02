@@ -12,59 +12,36 @@
 #include <SDL3/SDL_gpu.h>
 #include <stdbool.h>
 
+#include "render/renderer.h"
+#include "assets/assets.h"
 #include "core/input.h"
+#include "ui/ui.h"
 
 // -----------------------------------------------------------------------------
 // Context
 // -----------------------------------------------------------------------------
 typedef struct EngineContext {
-    //
     // Core Systems
-    //
     SDL_GPUDevice* gpu;
     SDL_Window* window;
 
-    //
     // Lifecycle
-    //
-    bool                    quitRequested;  // Main loop kill switch
-    bool                    isBackground;   // Android: App is hidden/sleeping
-    bool                    hasWindow;      // PC: Window is minimized/lost
+    bool quitRequested;
+    bool isBackground;   // Android: App is hidden/sleeping
+    bool hasWindow;      // PC: Window is minimized/lost
 
-    //
+    // Game structs
+    Renderer renderer;
+    Assets assets;
+    UI ui;
+    InputState input;
+
     // Time
-    //
     struct {
-        float               delta;          // Seconds since last frame
-        double              total;          // Seconds since startup
-        Uint64              lastTick;
+        float delta;
+        double total;
+        Uint64 lastTick;
     } time;
-
-    //
-    // Resources & Pipeline
-    //
-    SDL_GPUComputePipeline* computePipeline;
-    SDL_GPUTexture* drawTexture;    // The 1280x720 render target
-
-    //
-    // Resolution
-    //
-    Uint32                  internalW;      // Game logic size (e.g., 1280)
-    Uint32                  internalH;      // Game logic size (e.g., 720)
-    
-    Uint32                  outputW;        // OS Window width
-    Uint32                  outputH;        // OS Window height
-
-    Uint32                  dispatchX;      // Derived from internalW
-    Uint32                  dispatchY;      // Derived from internalH
-
-    SDL_Rect                viewport;       // Letterbox destination rect
-
-    //
-    // Input
-    //
-    InputState              input;
-
 } EngineContext;
 
 // -----------------------------------------------------------------------------
@@ -90,8 +67,5 @@ static inline SDL_GPUShaderFormat Engine_GetShaderFormat(void) {
 
 bool Engine_Init(EngineContext* ctx);
 void Engine_Shutdown(EngineContext* ctx);
-
-// Resizes VRAM texture. Blocks if GPU is busy.
-void Engine_ResizeTexture(EngineContext* ctx, int w, int h);
 
 #endif // CORE_ENGINE_H
