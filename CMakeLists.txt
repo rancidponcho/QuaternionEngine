@@ -48,10 +48,15 @@ set(SOURCE_FILES
     "src/core/engine.c"
     "src/core/input.c"
     "src/core/hotload.c"
+    "src/debug/debug_overlay.c"
     "src/render/renderer.c"
+    "src/render/ui_renderer.c"
     "src/assets/assets.c"
     "src/assets/font.c"
     "src/ui/ui.c"
+    "src/ui/ui_text.c"
+    "src/ui/ui_panel.c"
+    "src/ui/text_layout.c"
 )
 
 # Shader outputs live in the build tree, not the source tree.
@@ -60,6 +65,7 @@ file(MAKE_DIRECTORY "${SHADER_OUTPUT_DIR}")
 
 set(BASIC_SPV "${SHADER_OUTPUT_DIR}/BasicCompute.spv")
 set(TEXT_SPV  "${SHADER_OUTPUT_DIR}/TextOverlayCompute.spv")
+set(PANEL_SPV "${SHADER_OUTPUT_DIR}/UIPanelCompute.spv")
 
 if(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
@@ -202,6 +208,13 @@ compile_shader(
     main
 )
 
+compile_shader(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/UIPanelCompute.hlsl"
+    "${PANEL_SPV}"
+    cs_6_0
+    main
+)
+
 # ==============================================================================
 # 4. SHADER DEPLOYMENT
 # ==============================================================================
@@ -215,9 +228,13 @@ if(NOT APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${TEXT_SPV}"
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets/shaders/TextOverlayCompute.spv"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PANEL_SPV}"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets/shaders/UIPanelCompute.spv"
         DEPENDS
             "${BASIC_SPV}"
             "${TEXT_SPV}"
+            "${PANEL_SPV}"
         COMMENT "Deploying shaders"
     )
 
@@ -225,5 +242,6 @@ if(NOT APPLE)
         DeployShaders
         Shader_BasicCompute
         Shader_TextOverlayCompute
+        Shader_UIPanelCompute
     )
 endif()

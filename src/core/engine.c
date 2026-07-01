@@ -31,7 +31,7 @@ bool Engine_Init(EngineContext *ctx) {
     }
 
     // Note: On iOS/Android, dimensions are ignored for fullscreen windows.
-    ctx->window = SDL_CreateWindow("Quaternion", 1280, 720, /*SDL_WINDOW_FULLSCREEN |*/ SDL_WINDOW_RESIZABLE);
+    ctx->window = SDL_CreateWindow("Quaternion", 640, 360, /*SDL_WINDOW_FULLSCREEN |*/ SDL_WINDOW_RESIZABLE);
     if (!ctx->window) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Window Creation Failed: %s", SDL_GetError());
         return false;
@@ -55,11 +55,11 @@ bool Engine_Init(EngineContext *ctx) {
 
     // Subsystems
     Input_Init(ctx);
+    UI_Init(ctx);
     ctx->time.lastTick = SDL_GetTicks();
    
-    if (!Renderer_Init(ctx)) return false;
     if (!Assets_Init(ctx)) return false;
-    UI_Init(ctx);
+    if (!Renderer_Init(ctx)) return false;
 
     SDL_Log("SYSTEM: Engine Initialized (Format: %d)", Engine_GetShaderFormat());
     return true;

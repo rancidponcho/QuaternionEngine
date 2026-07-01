@@ -4,35 +4,32 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MAX_TEXTBOXES 256
-#define MAX_CHARS_PER_TEXTBOX 256
+#define UI_INVALID_ID UINT32_MAX
+
+#define UI_COLOR_RGBA(r, g, b, a) \
+    ((((uint32_t)(r) & 0xffu) << 24) | \
+     (((uint32_t)(g) & 0xffu) << 16) | \
+     (((uint32_t)(b) & 0xffu) << 8)  | \
+     ((uint32_t)(a) & 0xffu))
 
 typedef struct EngineContext EngineContext;
-typedef struct Font Font;
+typedef struct UI UI;
 
-typedef struct TextBox {
-    uint8_t id;
-    Font* font;
-
-    int x;
-    int y;
-
-    uint32_t length;
-    bool active;
-} TextBox;
-
-typedef struct UI {
-    TextBox textboxes[MAX_TEXTBOXES];
-
-    uint16_t text_buffer[MAX_TEXTBOXES][MAX_CHARS_PER_TEXTBOX];
-
-    uint32_t free_stack[MAX_TEXTBOXES];
-    uint32_t free_count;
-} UI;
+typedef struct UIStyle {
+    uint8_t padding;
+    uint8_t border;
+    uint32_t text_color;
+    uint32_t fill_color;
+    uint32_t border_color;
+} UIStyle;
 
 void UI_Init(EngineContext* ctx);
 
-uint32_t UI_CreateTextBox(UI* ui, Font* font, int x, int y);
-void UI_DestroyTextBox(UI* ui, uint32_t id);
+uint32_t UI_CreatePanel(UI* ui, int x, int y, uint16_t width);
+void UI_DestroyPanel(UI* ui, uint32_t id);
+bool UI_SetPanelText(EngineContext* ctx, uint32_t panel_id, const char* text);
+bool UI_SetPanelPosition(EngineContext* ctx, uint32_t panel_id, int x, int y);
+bool UI_SetPanelStyle(EngineContext* ctx, uint32_t panel_id, const UIStyle* style);
+bool UI_SetPanelWidth(EngineContext* ctx, uint32_t panel_id, uint16_t width);
 
 #endif // UI_H

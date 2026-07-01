@@ -5,6 +5,7 @@
 */
 
 #include "core/input.h"
+#include "SDL3/SDL_scancode.h"
 #include "core/engine.h"
 #include "render/renderer.h"
 #include "core/hotload.h"
