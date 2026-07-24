@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "core/engine.h"
 
@@ -154,7 +155,11 @@ bool loadFont(EngineContext *ctx, Font *font, const char *path) {
 }
 
 void destroyFont(EngineContext *ctx, Font *font) {
-    if (font->atlas) {
+    if (!ctx || !font) {
+        return;
+    }
+
+    if (font->atlas && ctx->gpu) {
         SDL_ReleaseGPUTexture(ctx->gpu, font->atlas);
         font->atlas = NULL;
     }

@@ -47,8 +47,10 @@ set(SOURCE_FILES
     "src/app/app.c"
     "src/core/engine.c"
     "src/core/input.c"
-    "src/core/hotload.c"
     "src/debug/debug_overlay.c"
+    "src/game/game_state.c"
+    "src/game/matter.c"
+    "src/game/player.c"
     "src/render/renderer.c"
     "src/render/ui_renderer.c"
     "src/assets/assets.c"
@@ -144,11 +146,11 @@ find_program(DXC_EXECUTABLE dxc)
 find_program(SPIRV_CROSS_EXECUTABLE spirv-cross)
 find_program(XCRUN_EXECUTABLE xcrun)
 
-function(compile_shader SOURCE SPV_OUT PROFILE ENTRY)
-    if(NOT DXC_EXECUTABLE)
-        return()
-    endif()
+if(NOT DXC_EXECUTABLE)
+    message(FATAL_ERROR "dxc shader compiler not found. Install DirectXShaderCompiler or add dxc to PATH.")
+endif()
 
+function(compile_shader SOURCE SPV_OUT PROFILE ENTRY)
     add_custom_command(
         OUTPUT  ${SPV_OUT}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUTPUT_DIR}"

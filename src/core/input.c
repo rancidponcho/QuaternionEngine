@@ -5,10 +5,8 @@
 */
 
 #include "core/input.h"
-#include "SDL3/SDL_scancode.h"
 #include "core/engine.h"
 #include "render/renderer.h"
-#include "core/hotload.h"
 
 #include <SDL3/SDL.h>
 
@@ -85,15 +83,6 @@ void Input_Poll(EngineContext* ctx) {
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (event.button.button == SDL_BUTTON_LEFT)  ctx->input.mouseLeft = false;
                 if (event.button.button == SDL_BUTTON_RIGHT) ctx->input.mouseRight = false;
-                break;
-
-            // Hotloading
-            case SDL_EVENT_KEY_DOWN:
-                if (event.key.scancode == SDL_SCANCODE_F5) {
-                    if(Hotload_RecompileShader()) {
-                        Renderer_ReloadShader(ctx);
-                    }
-                }
                 break;
         }
     }

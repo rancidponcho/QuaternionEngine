@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define TEXT_LAYOUT_GLYPH_W 9u
-#define TEXT_LAYOUT_GLYPH_H 14u
+#define TEXT_LAYOUT_GLYPH_W 8u
+#define TEXT_LAYOUT_GLYPH_H 8u
 
 typedef struct TextLayoutMetrics {
     uint16_t text_width;

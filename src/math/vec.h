@@ -13,7 +13,7 @@ typedef struct Vec2 {
 } Vec2;
 
 static inline Vec2 Vec2_Normalize(Vec2 v) {
-    float len = sqrtf(v.y * v.y + v.y * v.y);
+    float len = sqrtf(v.x * v.x + v.y * v.y);
     if (len > 0.0001f) {
         float inv = 1.0f / len;
         return (Vec2){ v.x * inv, v.y * inv };

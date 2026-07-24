@@ -10,16 +10,23 @@
 
 #include "renderer.h"
 
+#include <math.h>
 #include <SDL3/SDL_log.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include "SDL3/SDL_error.h"
 #include "SDL3/SDL_gpu.h"
 #include "core/types.h"
 #include "core/engine.h"
+#include "game/matter.h"
 #include "render/ui_renderer.h"
 
-#define BASE_SHORT_SIDE 360
+#define BASE_SHORT_SIDE 256
+#define CAMERA_FOLLOW_RATE 5.5f
+#define GPU_MATTER_NODE_BUFFER_SIZE (MAX_MATTER_NODES * sizeof(MatterNodeGPU))
+#define PHYSICS_DEBUG_CIRCLE_WIDTH 0.65f
+#define PHYSICS_DEBUG_FIELD_WIDTH 0.045f
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
@@ -35,7 +42,7 @@ static void* LoadFile(const char* path, size_t* outSize) {
 
     size_t size = SDL_GetIOSize(io);
     void* data = SDL_malloc(size);
-    
+
     if (SDL_ReadIO(io, data, size) != size) {
         SDL_Log("RENDER: Short read on shader: %s", path);
         SDL_free(data);
@@ -57,7 +64,7 @@ static const char* GetShaderExtension(void) {
     #endif
 }
 
-// Pipeline ititializer (Also used for hotloading)
+// Pipeline initializer.
 static SDL_GPUComputePipeline* _CreateComputePipeline(SDL_GPUDevice* gpu) {
     // Shader Path Resolution
     char shaderPath[256];
@@ -86,18 +93,101 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(SDL_GPUDevice* gpu) {
         .entrypoint = entryPoint,
         .format = Engine_GetShaderFormat(),
 
+        .num_samplers = 0,
         .num_readonly_storage_textures = 0,
-        .num_uniform_buffers = 1,
+        .num_readonly_storage_buffers = 1,
         .num_readwrite_storage_textures = 1, // Binding 0
+        .num_readwrite_storage_buffers = 0,
+        .num_uniform_buffers = 1,
         .threadcount_x = 8,
         .threadcount_y = 8,
-        .threadcount_z = 1
+        .threadcount_z = 1,
+        .props = 0
     };
 
     SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
     SDL_free(code);
-    
+
     return pipeline;
+}
+
+static bool Renderer_CreateMatterBuffers(EngineContext* ctx) {
+    SDL_GPUBufferCreateInfo nodeBufferInfo = {
+        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
+        .size = GPU_MATTER_NODE_BUFFER_SIZE,
+        .props = 0
+    };
+
+    ctx->renderer.matterNodeBuffer = SDL_CreateGPUBuffer(ctx->gpu, &nodeBufferInfo);
+    if (!ctx->renderer.matterNodeBuffer) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create matter node buffer: %s", SDL_GetError());
+        return false;
+    }
+
+    SDL_GPUTransferBufferCreateInfo nodeTransferInfo = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = GPU_MATTER_NODE_BUFFER_SIZE,
+        .props = 0
+    };
+
+    ctx->renderer.matterNodeTransferBuffer = SDL_CreateGPUTransferBuffer(ctx->gpu, &nodeTransferInfo);
+    if (!ctx->renderer.matterNodeTransferBuffer) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create matter node transfer buffer: %s", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
+static bool Renderer_UploadBuffer(
+    EngineContext* ctx,
+    SDL_GPUCommandBuffer* cmd,
+    SDL_GPUTransferBuffer* transferBuffer,
+    SDL_GPUBuffer* gpuBuffer,
+    const void* srcData,
+    size_t sizeBytes
+) {
+    void* mapped = SDL_MapGPUTransferBuffer(ctx->gpu, transferBuffer, true);
+    if (!mapped) {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to map renderer transfer buffer: %s", SDL_GetError());
+        return false;
+    }
+
+    memcpy(mapped, srcData, sizeBytes);
+    SDL_UnmapGPUTransferBuffer(ctx->gpu, transferBuffer);
+
+    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
+    if (!copyPass) {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to begin renderer copy pass: %s", SDL_GetError());
+        return false;
+    }
+
+    SDL_GPUTransferBufferLocation src = {
+        .transfer_buffer = transferBuffer,
+        .offset = 0
+    };
+
+    SDL_GPUBufferRegion dst = {
+        .buffer = gpuBuffer,
+        .offset = 0,
+        .size = sizeBytes
+    };
+
+    SDL_UploadToGPUBuffer(copyPass, &src, &dst, true);
+    SDL_EndGPUCopyPass(copyPass);
+
+    return true;
+}
+
+static Vec2 Renderer_ViewOrigin(const Renderer* renderer) {
+    if (!renderer || !renderer->cameraInitialized) {
+        return (Vec2){0.0f, 0.0f};
+    }
+
+    return (Vec2){
+        renderer->cameraCenter.x - (float)renderer->internalW * 0.5f,
+        renderer->cameraCenter.y - (float)renderer->internalH * 0.5f
+    };
 }
 
 // -----------------------------------------------------------------------------
@@ -105,6 +195,8 @@ static SDL_GPUComputePipeline* _CreateComputePipeline(SDL_GPUDevice* gpu) {
 // -----------------------------------------------------------------------------
 
 bool Renderer_Init(EngineContext* ctx) {
+    ctx->renderer.physicsDebugFlags = RENDERER_PHYSICS_DEBUG_DEFAULT;
+
     // Create pipelines
     ctx->renderer.computePipeline = _CreateComputePipeline(ctx->gpu);
     if (!ctx->renderer.computePipeline) {
@@ -112,7 +204,13 @@ bool Renderer_Init(EngineContext* ctx) {
         return false;
     }
 
+    if (!Renderer_CreateMatterBuffers(ctx)) {
+        Renderer_Shutdown(ctx);
+        return false;
+    }
+
     if (!UIRenderer_Init(ctx)) {
+        Renderer_Shutdown(ctx);
         return false;
     }
 
@@ -125,6 +223,10 @@ bool Renderer_Init(EngineContext* ctx) {
 }
 
 void Renderer_Shutdown(EngineContext* ctx) {
+    if (!ctx || !ctx->gpu) {
+        return;
+    }
+
     SDL_WaitForGPUIdle(ctx->gpu);
 
     if (ctx->renderer.computePipeline) {
@@ -133,10 +235,18 @@ void Renderer_Shutdown(EngineContext* ctx) {
     }
     UIRenderer_Shutdown(ctx);
 
+    if (ctx->renderer.matterNodeBuffer) {
+        SDL_ReleaseGPUBuffer(ctx->gpu, ctx->renderer.matterNodeBuffer);
+        ctx->renderer.matterNodeBuffer = NULL;
+    }
+    if (ctx->renderer.matterNodeTransferBuffer) {
+        SDL_ReleaseGPUTransferBuffer(ctx->gpu, ctx->renderer.matterNodeTransferBuffer);
+        ctx->renderer.matterNodeTransferBuffer = NULL;
+    }
     if (ctx->renderer.drawTexture) {
         SDL_ReleaseGPUTexture(ctx->gpu, ctx->renderer.drawTexture);
         ctx->renderer.drawTexture = NULL;
-    }    
+    }
 }
 
 void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
@@ -160,7 +270,6 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
     // Reallocation
     // -------------------------------------------------------------------------
     if (ctx->renderer.internalW != newTexW || ctx->renderer.internalH != newTexH) {
-       // Engine_ResizeTexture(ctx, newTexW, newTexH);
         SDL_WaitForGPUIdle(ctx->gpu);
 
         if (ctx->renderer.drawTexture) {
@@ -169,7 +278,7 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
 
         ctx->renderer.internalW = newTexW;
         ctx->renderer.internalH = newTexH;
-        
+
         SDL_GPUTextureCreateInfo tex_info = {
             .type = SDL_GPU_TEXTURETYPE_2D,
             .format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
@@ -188,62 +297,155 @@ void Renderer_Resize(EngineContext* ctx, int winW, int winH) {
             SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to resize VRAM texture to %dx%d", newTexW, newTexH);
         } else {
             SDL_Log("System: VRAM Resized [%dx%d]", newTexW, newTexH);
-        }        
-            
+        }
+
         // Update simulation dispatch groups to match new texture size
         ctx->renderer.dispatchX = (newTexW + 7) / 8;
         ctx->renderer.dispatchY = (newTexH + 7) / 8;
+
+        if (!ctx->renderer.cameraInitialized) {
+            Renderer_SetCameraCenter(
+                ctx,
+                (Vec2){
+                    (float)ctx->renderer.internalW * 0.5f,
+                    (float)ctx->renderer.internalH * 0.5f
+                }
+            );
+        }
     }
 
     // Viewport centering
     int finalW = ctx->renderer.internalW * scale;
     int finalH = ctx->renderer.internalH * scale;
-    
+
     ctx->renderer.viewport.x = (winW - finalW) / 2;
     ctx->renderer.viewport.y = (winH - finalH) / 2;
     ctx->renderer.viewport.w = finalW;
     ctx->renderer.viewport.h = finalH;
 }
 
+void Renderer_SetCameraCenter(EngineContext* ctx, Vec2 center) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->renderer.cameraCenter = center;
+    ctx->renderer.cameraInitialized = true;
+}
+
+void Renderer_UpdateCamera(EngineContext* ctx, Vec2 target_center, float dt) {
+    if (!ctx) {
+        return;
+    }
+
+    if (!ctx->renderer.cameraInitialized || dt <= 0.0f) {
+        Renderer_SetCameraCenter(ctx, target_center);
+        return;
+    }
+
+    float t = 1.0f - expf(-CAMERA_FOLLOW_RATE * dt);
+    Vec2 delta = Vec2_Sub(target_center, ctx->renderer.cameraCenter);
+    ctx->renderer.cameraCenter = Vec2_Add(
+        ctx->renderer.cameraCenter,
+        Vec2_Scale(delta, t)
+    );
+}
+
+bool Renderer_WindowToInternalPoint(const EngineContext* ctx, Vec2 window_point, Vec2* internal_point) {
+    if (!ctx || !internal_point) {
+        return false;
+    }
+
+    SDL_Rect viewport = ctx->renderer.viewport;
+    if (viewport.w <= 0 || viewport.h <= 0) {
+        return false;
+    }
+
+    if (window_point.x < (float)viewport.x ||
+        window_point.y < (float)viewport.y ||
+        window_point.x >= (float)(viewport.x + viewport.w) ||
+        window_point.y >= (float)(viewport.y + viewport.h))
+    {
+        return false;
+    }
+
+    internal_point->x = (window_point.x - (float)viewport.x) *
+        ((float)ctx->renderer.internalW / (float)viewport.w);
+    internal_point->y = (window_point.y - (float)viewport.y) *
+        ((float)ctx->renderer.internalH / (float)viewport.h);
+
+    return true;
+}
+
+bool Renderer_WindowToWorldPoint(const EngineContext* ctx, Vec2 window_point, Vec2* world_point) {
+    if (!world_point) {
+        return false;
+    }
+
+    Vec2 internal_point;
+    if (!Renderer_WindowToInternalPoint(ctx, window_point, &internal_point)) {
+        return false;
+    }
+
+    *world_point = Vec2_Add(internal_point, Renderer_ViewOrigin(&ctx->renderer));
+    return true;
+}
+
 bool Renderer_Render(EngineContext* ctx) {
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(ctx->gpu);
-    if (!cmd) return false; 
+    if (!cmd) return false;
 
     SDL_GPUTexture* swapchainTex;
     Uint32 w, h;
 
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, ctx->window, &swapchainTex, &w, &h)) {
         SDL_CancelGPUCommandBuffer(cmd);
-        SDL_Delay(100); // Safety valve?
+        SDL_Delay(100);
         return false;
     }
 
     if (swapchainTex) {
         SDL_GPUStorageTextureReadWriteBinding storageBinding = {
-            .texture = ctx->renderer.drawTexture, 
-            .mip_level = 0, 
-            .layer = 0, 
+            .texture = ctx->renderer.drawTexture,
+            .mip_level = 0,
+            .layer = 0,
             .cycle = false
         };
 
-        // ---------------------------------------------------------------------
-        // Prepare Uniform Buffer
-        ShaderUniforms uniforms = {
-            .time = ctx->time.total,
-            .pad0 = 0.0f,
-            // Mouse: Normalize relative to the WINDOW (Output), not the Game
-            .mousePos = { 
-                ctx->input.mousePos.x / (float)ctx->renderer.outputW,
-                ctx->input.mousePos.y / (float)ctx->renderer.outputH 
-            },
+        Vec2 cursorPos = {0.0f, 0.0f};
+        bool cursorVisible = Renderer_WindowToInternalPoint(ctx, ctx->input.mousePos, &cursorPos);
 
-            .resolution = { 
-                (float)ctx->renderer.internalW, 
-                (float)ctx->renderer.internalH 
+        ShaderUniforms uniforms = {
+            .resolution = {
+                (float)ctx->renderer.internalW,
+                (float)ctx->renderer.internalH
             },
-            .pad1 = 0.0f
+            .matterNodeCount = ctx->matter.node_count,
+            .matterThreshold = MATTER_FIELD_THRESHOLD,
+            .viewOrigin = Renderer_ViewOrigin(&ctx->renderer),
+            .cursorPos = cursorPos,
+            .cursorVisible = cursorVisible ? 1u : 0u,
+            .physicsDebugFlags = ctx->renderer.physicsDebugFlags,
+            .physicsDebugCircleWidth = PHYSICS_DEBUG_CIRCLE_WIDTH,
+            .physicsDebugFieldWidth = PHYSICS_DEBUG_FIELD_WIDTH
         };
 
+        if (ctx->matter.dirty) {
+            if (!Renderer_UploadBuffer(
+                    ctx,
+                    cmd,
+                    ctx->renderer.matterNodeTransferBuffer,
+                    ctx->renderer.matterNodeBuffer,
+                    ctx->matter.gpu_nodes,
+                    GPU_MATTER_NODE_BUFFER_SIZE
+                ))
+            {
+                SDL_CancelGPUCommandBuffer(cmd);
+                return false;
+            }
+
+            ctx->matter.dirty = false;
+        }
 
         // ---------------------------------------------------------------------
         // Base Compute Pass
@@ -256,6 +458,8 @@ bool Renderer_Render(EngineContext* ctx) {
         );
 
         SDL_BindGPUComputePipeline(computePass, ctx->renderer.computePipeline);
+        SDL_GPUBuffer* matterStorageBuffers[] = {ctx->renderer.matterNodeBuffer};
+        SDL_BindGPUComputeStorageBuffers(computePass, 0, matterStorageBuffers, 1);
         SDL_PushGPUComputeUniformData(cmd, 0, &uniforms, sizeof(uniforms));
         SDL_DispatchGPUCompute(computePass, ctx->renderer.dispatchX, ctx->renderer.dispatchY, 1);
         SDL_EndGPUComputePass(computePass);
@@ -287,21 +491,10 @@ bool Renderer_Render(EngineContext* ctx) {
         SDL_BlitGPUTexture(cmd, &blitInfo);
     }
 
-    SDL_SubmitGPUCommandBuffer(cmd);
-    return true;
-}
-
-void Renderer_ReloadShader(EngineContext *ctx) 
-{
-    SDL_WaitForGPUIdle(ctx->gpu);
-
-    SDL_GPUComputePipeline* newPipeline = _CreateComputePipeline(ctx->gpu);
-
-    if (newPipeline) {
-        SDL_ReleaseGPUComputePipeline(ctx->gpu, ctx->renderer.computePipeline);
-        ctx->renderer.computePipeline = newPipeline;
-        SDL_Log("RENDER: Shader Hot-Reloaded.");
-    } else {
-        SDL_Log("RENDER: Hot-reload failed.");
+    if (!SDL_SubmitGPUCommandBuffer(cmd)) {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to submit renderer command buffer: %s", SDL_GetError());
+        return false;
     }
+
+    return true;
 }

@@ -4,9 +4,15 @@
 #include "app/app.h"
 
 int main(int argc, char *argv[]) {    
+    (void)argc;
+    (void)argv;
+
     EngineContext ctx = {0};
 
-    if (!App_Init(&ctx)) return 1;
+    if (!App_Init(&ctx)) {
+        App_Shutdown(&ctx);
+        return 1;
+    }
     App_Run(&ctx);
     App_Shutdown(&ctx);
     

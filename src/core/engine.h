@@ -15,6 +15,9 @@
 #include "render/renderer.h"
 #include "assets/assets.h"
 #include "core/input.h"
+#include "game/game_state.h"
+#include "game/matter.h"
+#include "game/player.h"
 #include "ui/ui_internal.h"
 
 // -----------------------------------------------------------------------------
@@ -33,6 +36,9 @@ typedef struct EngineContext {
     // Game structs
     Renderer renderer;
     Assets assets;
+    GameState game;
+    MatterWorld matter;
+    Player player;
     UI ui;
     InputState input;
 

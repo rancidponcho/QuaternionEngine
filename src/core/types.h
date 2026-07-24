@@ -1,6 +1,8 @@
 #ifndef CORE_TYPES_H
 #define CORE_TYPES_H
 
+#include <stdint.h>
+
 #include "math/vec.h"
 
 // -----------------------------------------------------------------------------
@@ -8,11 +10,15 @@
 // -----------------------------------------------------------------------------
 // 16-byte alignment
 typedef struct ShaderUniforms {
-    float   time;       // Time in seconds
-    float   pad0;
-    Vec2    mousePos;   // Normalized
     Vec2    resolution; // Internal Resolution
-    Vec2    pad1;
+    uint32_t matterNodeCount;
+    float   matterThreshold;
+    Vec2    viewOrigin;
+    Vec2    cursorPos;
+    uint32_t cursorVisible;
+    uint32_t physicsDebugFlags;
+    float   physicsDebugCircleWidth;
+    float   physicsDebugFieldWidth;
 } ShaderUniforms;
 
 #endif // CORE_TYPES_H

@@ -8,8 +8,8 @@ RWTexture2D<float4> OutTex : register(u0, space1);
 #define MAX_UI_TEXT_LINES 256
 #define MAX_CHARS_PER_TEXT_LINE 256
 
-#define GLYPH_W 9
-#define GLYPH_H 14
+#define GLYPH_W 8
+#define GLYPH_H 8
 #define ATLAS_COLS 18
 
 #define UITEXTLINE_META_LENGTH 0

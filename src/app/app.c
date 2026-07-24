@@ -1,47 +1,96 @@
 #include "app.h"
 
-#include "core/engine.h"
-#include "core/input.h"
 #include "debug/debug_overlay.h"
+#include "game/matter.h"
+#include "game/player.h"
 #include "render/renderer.h"
-#include "ui/ui.h"
 #include <SDL3/SDL.h>
+#include <float.h>
+
+#define PLAYER_SURFACE_SPAWN_CLEARANCE 26.0f
+#define PHYSICS_DEBUG_FLAGS RENDERER_PHYSICS_DEBUG_DEFAULT
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
 // -----------------------------------------------------------------------------
 
-// Recovers window when lost by Operating System (looking at you, Android)
+static Vec2 App_FindPlanetSpawnPoint(const MatterWorld* world, Vec2 fallback) {
+    Vec2 spawn = fallback;
+    float best_surface_y = FLT_MAX;
+
+    for (uint32_t i = 0; i < world->node_count; i++) {
+        const MatterNode* node = &world->nodes[i];
+        if (node->radius <= 0.0f || node->material == MATERIAL_PLAYER) {
+            continue;
+        }
+
+        float surface_y = node->pos.y - node->radius;
+        if (surface_y < best_surface_y) {
+            best_surface_y = surface_y;
+            spawn = (Vec2){node->pos.x, surface_y - PLAYER_SURFACE_SPAWN_CLEARANCE};
+        }
+    }
+
+    return spawn;
+}
+
+static void App_SpawnInitialMatter(EngineContext* ctx) {
+    Vec2 planet_center = {
+        (float)ctx->renderer.internalW * 0.5f,
+        (float)ctx->renderer.internalH * 0.56f
+    };
+
+    const float planet_radius = 185.0f;
+    Uint64 launch_seed = SDL_GetPerformanceCounter();
+    uint32_t seed = (uint32_t)(launch_seed ^ (launch_seed >> 32));
+
+    MatterWorld_GeneratePlanet(
+        &ctx->matter,
+        planet_center,
+        planet_radius,
+        MAX_MATTER_NODES - PLAYER_BODY_NODE_COUNT,
+        seed
+    );
+
+    Vec2 player_center = App_FindPlanetSpawnPoint(
+        &ctx->matter,
+        (Vec2){planet_center.x, planet_center.y - planet_radius * 0.84f}
+    );
+
+    if (Player_Spawn(&ctx->player, &ctx->matter, player_center)) {
+        Vec2 player_pos;
+        if (Player_GetPosition(&ctx->player, &ctx->matter, &player_pos)) {
+            Renderer_SetCameraCenter(ctx, player_pos);
+        }
+    }
+}
+
 static void App_HandleLifecycle(EngineContext* ctx) {
-    // Background Throttling
     if (ctx->isBackground) {
         SDL_Delay(100);
         return;
     }
 
-    // If running (!isBackground) but have no window...
-    if (!ctx->hasWindow) {
-        // Ensure released
-        SDL_ReleaseWindowFromGPUDevice(ctx->gpu, ctx->window);
-
-        // Try to get it back
-        if (SDL_ClaimWindowForGPUDevice(ctx->gpu, ctx->window)) {
-            // Sync the renderer to the new window size
-            int w, h;
-            SDL_GetWindowSizeInPixels(ctx->window, &w, &h);
-            Renderer_Resize(ctx, w, h);
-            
-            ctx->hasWindow = true;
-            SDL_Log("SYSTEM: Window Recovered");
-        } else {
-            // Wait a bit. Don't hammer the CPU/GPU driver
-            SDL_Delay(20);
-        }
+    if (ctx->hasWindow) {
+        return;
     }
+
+    SDL_ReleaseWindowFromGPUDevice(ctx->gpu, ctx->window);
+
+    if (!SDL_ClaimWindowForGPUDevice(ctx->gpu, ctx->window)) {
+        SDL_Delay(20);
+        return;
+    }
+
+    int w, h;
+    SDL_GetWindowSizeInPixels(ctx->window, &w, &h);
+    Renderer_Resize(ctx, w, h);
+
+    ctx->hasWindow = true;
+    SDL_Log("SYSTEM: Window Recovered");
 }
 
 static void App_Render(EngineContext* ctx) {
-    // Only draw on valid window
     if (!ctx->hasWindow || ctx->isBackground) return;
 
     if (!Renderer_Render(ctx)) {
@@ -50,59 +99,56 @@ static void App_Render(EngineContext* ctx) {
     }
 }
 
-static void App_Update(EngineContext* ctx) {
-    static uint32_t test_panel = UI_INVALID_ID;
-    static uint32_t test_mode = 0;
+static void App_UpdatePlayer(EngineContext* ctx) {
+    Vec2 target = {0.0f, 0.0f};
+    bool move_active = ctx->input.mouseRight &&
+        Renderer_WindowToWorldPoint(ctx, ctx->input.mousePos, &target);
 
-    if (Input_GetKeyDown(ctx, SDL_SCANCODE_Q)) {
-        if (test_panel == UI_INVALID_ID) {
-            test_panel = UI_CreatePanel(&ctx->ui, 20, 20, 180);
-            if (test_panel == UI_INVALID_ID) {
-                return;
-            }
+    Player_Update(
+        &ctx->player,
+        &ctx->matter,
+        move_active,
+        target,
+        ctx->time.delta
+    );
+}
 
-            UI_SetPanelText(
-                ctx,
-                test_panel,
-                "Panel controls: Q cycles position, width, colors, and rewraps this saved text."
-            );
-        }
-
-        uint32_t mode = test_mode++ % 3u;
-        UIStyle style = {
-            .padding = 4,
-            .border = 1,
-            .text_color = UI_COLOR_RGBA(240, 248, 255, 255),
-            .fill_color = UI_COLOR_RGBA(10, 18, 24, 190),
-            .border_color = UI_COLOR_RGBA(255, 210, 96, 255)
-        };
-        int x = 20;
-        int y = 20;
-        uint16_t width = 180;
-
-        if (mode == 1u) {
-            x = 54;
-            y = 34;
-            width = 132;
-            style.padding = 6;
-            style.text_color = UI_COLOR_RGBA(255, 244, 214, 255);
-            style.fill_color = UI_COLOR_RGBA(40, 18, 38, 210);
-            style.border_color = UI_COLOR_RGBA(255, 124, 172, 255);
-        } else if (mode == 2u) {
-            x = 28;
-            y = 62;
-            width = 240;
-            style.border = 2;
-            style.text_color = UI_COLOR_RGBA(224, 255, 234, 255);
-            style.fill_color = UI_COLOR_RGBA(14, 44, 38, 200);
-            style.border_color = UI_COLOR_RGBA(105, 230, 170, 255);
-        }
-
-        UI_SetPanelStyle(ctx, test_panel, &style);
-        UI_SetPanelWidth(ctx, test_panel, width);
-        UI_SetPanelPosition(ctx, test_panel, x, y);
+static void App_UpdateMining(EngineContext* ctx) {
+    if (!ctx->input.mouseLeft) {
+        return;
     }
 
+    Vec2 target;
+    if (!Renderer_WindowToWorldPoint(ctx, ctx->input.mousePos, &target)) {
+        return;
+    }
+
+    MatterWorld_Mine(&ctx->matter, target, 12.0f, 18.0f * ctx->time.delta);
+}
+
+static void App_UpdateCamera(EngineContext* ctx) {
+    Vec2 player_pos;
+    if (Player_GetPosition(&ctx->player, &ctx->matter, &player_pos)) {
+        Renderer_UpdateCamera(ctx, player_pos, ctx->time.delta);
+    }
+}
+
+static void App_UpdateDebugInput(EngineContext* ctx) {
+    if (Input_GetKeyDown(ctx, SDL_SCANCODE_F3)) {
+        ctx->renderer.physicsDebugFlags ^= PHYSICS_DEBUG_FLAGS;
+    }
+}
+
+static void App_Update(EngineContext* ctx) {
+    App_UpdateDebugInput(ctx);
+    App_UpdateMining(ctx);
+    App_UpdatePlayer(ctx);
+
+    MatterWorld_ApplyIslandGravityToMatter(&ctx->matter, ctx->time.delta);
+    MatterWorld_ApplyIslandGravityToMaterial(&ctx->matter, MATERIAL_PLAYER, ctx->time.delta);
+
+    MatterWorld_Update(&ctx->matter, ctx->time.delta);
+    App_UpdateCamera(ctx);
     DebugOverlay_Update(ctx, ctx->time.delta);
 }
 
@@ -111,13 +157,15 @@ static void App_Update(EngineContext* ctx) {
 // ----------------------------------------------------------------------------
 
 bool App_Init(EngineContext *ctx) {
+    GameState_Init(&ctx->game);
+
     if (!Engine_Init(ctx)) {
         return false;
     }
 
-    DebugOverlay_Init(ctx);
+    App_SpawnInitialMatter(ctx);
 
-    // Network, Audio, etc...
+    DebugOverlay_Init(ctx);
 
     return true;
 }

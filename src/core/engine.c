@@ -5,9 +5,6 @@
 ================================================================================
 */
 
-#include <math.h>
-#include <stdio.h>
-
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_log.h>
@@ -30,11 +27,20 @@ bool Engine_Init(EngineContext *ctx) {
         return false;
     }
 
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+    if (ctx->game.display.fullscreen) {
+        window_flags |= SDL_WINDOW_FULLSCREEN;
+    }
+
     // Note: On iOS/Android, dimensions are ignored for fullscreen windows.
-    ctx->window = SDL_CreateWindow("Quaternion", 640, 360, /*SDL_WINDOW_FULLSCREEN |*/ SDL_WINDOW_RESIZABLE);
+    ctx->window = SDL_CreateWindow("Quaternion", 640, 360, window_flags);
     if (!ctx->window) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Window Creation Failed: %s", SDL_GetError());
         return false;
+    }
+
+    if (!SDL_HideCursor()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Failed to hide system cursor: %s", SDL_GetError());
     }
 
     // GPU Device
@@ -66,10 +72,19 @@ bool Engine_Init(EngineContext *ctx) {
 }
 
 void Engine_Shutdown(EngineContext *ctx) {
+    if (!ctx) {
+        return;
+    }
+
     SDL_Log("SYSTEM: Engine Shutdown Initiated");
 
-    Assets_Destroy(ctx);
     Renderer_Shutdown(ctx);
+    Assets_Destroy(ctx);
+
+    if (ctx->gpu && ctx->window && ctx->hasWindow) {
+        SDL_ReleaseWindowFromGPUDevice(ctx->gpu, ctx->window);
+        ctx->hasWindow = false;
+    }
 
     if (ctx->gpu) {
         SDL_DestroyGPUDevice(ctx->gpu);
