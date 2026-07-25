@@ -353,6 +353,7 @@ bool Renderer_Render(EngineContext* ctx) {
             viewOrigin,
             visibleMatterNodes
         );
+        ctx->renderer.visibleMatterNodeCount = visibleMatterNodeCount;
 
         ShaderUniforms uniforms = {
             .resolution = {

@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-#include "game/matter_material.h"
+#include "game/matter_internal.h"
 
 #define MATTER_GRAVITY_SURFACE_ACCEL 54.0f
 #define MATTER_GRAVITY_MAX_ACCEL 62.0f

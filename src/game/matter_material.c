@@ -1,4 +1,4 @@
-#include "game/matter_material.h"
+#include "game/matter_internal.h"
 
 #include <math.h>
 

@@ -39,6 +39,7 @@ typedef struct Renderer {
     Uint32 outputH;        // OS Window height
     Uint32 dispatchX;      // Derived from internalW
     Uint32 dispatchY;      // Derived from internalH
+    Uint32 visibleMatterNodeCount;
     Uint32 physicsDebugFlags;
 
     SDL_Rect viewport;     // Letterbox destination rect

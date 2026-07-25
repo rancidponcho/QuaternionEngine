@@ -1,5 +1,5 @@
-#ifndef GAME_MATTER_MATERIAL_H
-#define GAME_MATTER_MATERIAL_H
+#ifndef GAME_MATTER_INTERNAL_H
+#define GAME_MATTER_INTERNAL_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -58,4 +58,4 @@ bool Matter_NodesCanConnect(
 float Matter_PairCollisionResponse(const MatterNode* a, const MatterNode* b);
 bool Matter_IsPlayerTerrainPair(const MatterNode* a, const MatterNode* b);
 
-#endif // GAME_MATTER_MATERIAL_H
+#endif // GAME_MATTER_INTERNAL_H

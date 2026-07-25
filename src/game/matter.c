@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "game/matter_material.h"
+#include "game/matter_internal.h"
 
 #define MATTER_TAU 6.2831853f
 #define MATTER_VISUAL_BRIDGE_SAMPLE_STEP 1.75f

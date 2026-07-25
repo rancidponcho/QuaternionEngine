@@ -28,7 +28,7 @@ void DebugOverlay_Init(EngineContext* ctx) {
         return;
     }
 
-    g_debug_overlay.panel_id = UI_CreatePanel(&ctx->ui, 4, 4, 104);
+    g_debug_overlay.panel_id = UI_CreatePanel(&ctx->ui, 4, 4, 120);
     if (g_debug_overlay.panel_id == UI_INVALID_ID) {
         return;
     }
@@ -42,7 +42,7 @@ void DebugOverlay_Init(EngineContext* ctx) {
     };
 
     UI_SetPanelStyle(ctx, g_debug_overlay.panel_id, &style);
-    UI_SetPanelText(ctx, g_debug_overlay.panel_id, "FPS --\nMS --");
+    UI_SetPanelText(ctx, g_debug_overlay.panel_id, "FPS --\nMS --\nNodes --\nDraw --\nLinks --\nBends --\nIslands --");
 
     g_debug_overlay.sample_time = 0.0f;
     g_debug_overlay.sample_frames = 0;
@@ -72,8 +72,19 @@ void DebugOverlay_Update(EngineContext* ctx, float dt) {
         ms = (g_debug_overlay.sample_time * 1000.0f) / (float)g_debug_overlay.sample_frames;
     }
 
-    char text[64];
-    snprintf(text, sizeof(text), "FPS %.1f\nMS %.2f", fps, ms);
+    char text[160];
+    snprintf(
+        text,
+        sizeof(text),
+        "FPS %.1f\nMS %.2f\nNodes %u\nDraw %u\nLinks %u\nBends %u\nIslands %u",
+        fps,
+        ms,
+        ctx->matter.gpu_node_count,
+        ctx->renderer.visibleMatterNodeCount,
+        ctx->matter.constraint_count,
+        ctx->matter.bend_constraint_count,
+        ctx->matter.island_count
+    );
     UI_SetPanelText(ctx, g_debug_overlay.panel_id, text);
 
     g_debug_overlay.sample_time = 0.0f;
