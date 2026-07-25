@@ -9,13 +9,7 @@
 typedef bool (*UI_WrappedLineFn)(void* user, const char* text, uint16_t length);
 
 static uint32_t UI_PanelFlags(const UIPanel* panel) {
-    uint32_t flags = 0;
-
-    if (panel->active) {
-        flags |= UIPANEL_FLAG_ACTIVE;
-    }
-
-    return flags;
+    return panel->active ? UIPANEL_FLAG_ACTIVE : 0u;
 }
 
 static uint16_t UI_ClampCharsPerLine(uint32_t chars_per_line) {
@@ -48,7 +42,7 @@ static uint16_t UI_GetPanelCharsPerLine(const UIPanel* panel) {
 static void UI_UpdatePanelHeight(UIPanel* panel) {
     uint16_t inset = (uint16_t)((panel->style.padding + panel->style.border) * 2u);
     uint16_t visible_lines = panel->line_count > 0 ? panel->line_count : 1;
-    uint16_t line_gaps = visible_lines > 0 ? (uint16_t)(visible_lines - 1u) : 0;
+    uint16_t line_gaps = (uint16_t)(visible_lines - 1u);
 
     panel->height = (uint16_t)(
         inset +
@@ -83,7 +77,6 @@ static void UI_UpdatePanelTextLinePlacements(UI* ui, UIPanel* panel) {
         line->y = (int16_t)(panel->y + inset + (int)line_index * (TEXT_LAYOUT_GLYPH_H + UI_TEXT_LINE_GAP));
         line->style.text_color = panel->style.text_color;
         UI_UpdateTextLineMeta(ui, line);
-        line->dirty = true;
 
         line_id = line->next_id;
         line_index++;
@@ -308,7 +301,6 @@ static bool UI_RebuildPanelTextLines(UI* ui, UIPanel* panel, const char* text) {
 
     UI_UpdatePanelHeight(panel);
     UI_UpdatePanelMeta(ui, panel);
-    panel->dirty = true;
     ui->panel_dirty = true;
 
     return true;
@@ -332,7 +324,6 @@ uint32_t UI_CreatePanel(UI* ui, int x, int y, uint16_t width) {
     panel->text[0] = '\0';
     panel->style = UI_DEFAULT_PANEL_STYLE;
     panel->active = true;
-    panel->dirty = false;
 
     UI_UpdatePanelHeight(panel);
     UI_UpdatePanelMeta(ui, panel);
@@ -363,7 +354,6 @@ void UI_DestroyPanel(UI* ui, uint32_t id) {
     panel->text[0] = '\0';
     panel->style = UI_DEFAULT_PANEL_STYLE;
     panel->active = false;
-    panel->dirty = false;
 
     memset(ui->panel_meta_buffer[id], 0, sizeof(ui->panel_meta_buffer[id]));
     ui->panel_free_stack[ui->panel_free_count++] = id;
@@ -408,7 +398,6 @@ bool UI_SetPanelPosition(EngineContext* ctx, uint32_t panel_id, int x, int y) {
     panel->y = (int16_t)y;
     UI_UpdatePanelTextLinePlacements(ui, panel);
     UI_UpdatePanelMeta(ui, panel);
-    panel->dirty = true;
     ui->panel_dirty = true;
 
     return true;

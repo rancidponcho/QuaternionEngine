@@ -13,18 +13,19 @@
 #include <math.h>
 #include <SDL3/SDL_log.h>
 #include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
+#include <stddef.h>
 #include "SDL3/SDL_error.h"
 #include "SDL3/SDL_gpu.h"
 #include "core/types.h"
 #include "core/engine.h"
 #include "game/matter.h"
+#include "render/gpu_common.h"
 #include "render/ui_renderer.h"
 
 #define BASE_SHORT_SIDE 256
 #define CAMERA_FOLLOW_RATE 5.5f
 #define GPU_MATTER_NODE_BUFFER_SIZE (MAX_MATTER_NODES * sizeof(MatterNodeGPU))
+#define MATTER_RENDER_FIELD_SUPPORT_SCALE 2.25f
 #define PHYSICS_DEBUG_CIRCLE_WIDTH 0.65f
 #define PHYSICS_DEBUG_FIELD_WIDTH 0.045f
 
@@ -32,149 +33,38 @@
 // Internal Helpers
 // -----------------------------------------------------------------------------
 
-// Reads raw binary assets (SPIR-V / Metallib) from disk.
-static void* LoadFile(const char* path, size_t* outSize) {
-    SDL_IOStream* io = SDL_IOFromFile(path, "rb");
-    if (!io) {
-        SDL_Log("RENDER: Failed to open shader: %s", path);
-        return NULL;
-    }
-
-    size_t size = SDL_GetIOSize(io);
-    void* data = SDL_malloc(size);
-
-    if (SDL_ReadIO(io, data, size) != size) {
-        SDL_Log("RENDER: Short read on shader: %s", path);
-        SDL_free(data);
-        SDL_CloseIO(io);
-        return NULL;
-    }
-
-    SDL_CloseIO(io);
-    if (outSize) *outSize = size;
-    return data;
-}
-
-// Returns "metallib" (Apple) or "spv" (Vulkan/Generic) for file paths.
-static const char* GetShaderExtension(void) {
-    #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
-        return "metallib";
-    #else
-        return "spv";
-    #endif
-}
-
 // Pipeline initializer.
-static SDL_GPUComputePipeline* _CreateComputePipeline(SDL_GPUDevice* gpu) {
-    // Shader Path Resolution
-    char shaderPath[256];
-    const char* ext = GetShaderExtension();
-    const char* basePath = SDL_GetBasePath();
-
-    if (basePath) {
-        // PC/Mac/iOS: Assets are in a specific Resources/bin folder
-        snprintf(shaderPath, sizeof(shaderPath), "%sassets/shaders/BasicCompute.%s", basePath, ext);
-    } else {
-        // Android: Assets are relative to the APK root
-        snprintf(shaderPath, sizeof(shaderPath), "shaders/BasicCompute.%s", ext);
-    }
-
-    // Pipeline Creation
-    size_t codeSize;
-    void* code = LoadFile(shaderPath, &codeSize);
-    if (!code) return NULL;
-
-    // Metal (via SPIRV-Cross) renames main -> main0
-    const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
-
-    SDL_GPUComputePipelineCreateInfo pipelineInfo = {
-        .code = code,
-        .code_size = codeSize,
-        .entrypoint = entryPoint,
-        .format = Engine_GetShaderFormat(),
-
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 1,
-        .num_readwrite_storage_textures = 1, // Binding 0
-        .num_readwrite_storage_buffers = 0,
-        .num_uniform_buffers = 1,
-        .threadcount_x = 8,
-        .threadcount_y = 8,
-        .threadcount_z = 1,
-        .props = 0
+static SDL_GPUComputePipeline* Renderer_CreateComputePipeline(SDL_GPUDevice* gpu) {
+    RenderGPUComputePipelineInfo pipeline_info = {
+        .sampler_count = 0,
+        .storage_buffer_count = 1,
+        .uniform_buffer_count = 1,
+        .thread_count_x = 8,
+        .thread_count_y = 8,
+        .thread_count_z = 1
     };
 
-    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
-    SDL_free(code);
-
-    return pipeline;
+    return RenderGPU_CreateComputePipeline(gpu, "BasicCompute", &pipeline_info);
 }
 
 static bool Renderer_CreateMatterBuffers(EngineContext* ctx) {
-    SDL_GPUBufferCreateInfo nodeBufferInfo = {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
-        .size = GPU_MATTER_NODE_BUFFER_SIZE,
-        .props = 0
-    };
-
-    ctx->renderer.matterNodeBuffer = SDL_CreateGPUBuffer(ctx->gpu, &nodeBufferInfo);
+    ctx->renderer.matterNodeBuffer = RenderGPU_CreateStorageBuffer(
+        ctx->gpu,
+        GPU_MATTER_NODE_BUFFER_SIZE,
+        "matter node"
+    );
     if (!ctx->renderer.matterNodeBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create matter node buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo nodeTransferInfo = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = GPU_MATTER_NODE_BUFFER_SIZE,
-        .props = 0
-    };
-
-    ctx->renderer.matterNodeTransferBuffer = SDL_CreateGPUTransferBuffer(ctx->gpu, &nodeTransferInfo);
+    ctx->renderer.matterNodeTransferBuffer = RenderGPU_CreateUploadTransferBuffer(
+        ctx->gpu,
+        GPU_MATTER_NODE_BUFFER_SIZE,
+        "matter node"
+    );
     if (!ctx->renderer.matterNodeTransferBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create matter node transfer buffer: %s", SDL_GetError());
         return false;
     }
-
-    return true;
-}
-
-static bool Renderer_UploadBuffer(
-    EngineContext* ctx,
-    SDL_GPUCommandBuffer* cmd,
-    SDL_GPUTransferBuffer* transferBuffer,
-    SDL_GPUBuffer* gpuBuffer,
-    const void* srcData,
-    size_t sizeBytes
-) {
-    void* mapped = SDL_MapGPUTransferBuffer(ctx->gpu, transferBuffer, true);
-    if (!mapped) {
-        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to map renderer transfer buffer: %s", SDL_GetError());
-        return false;
-    }
-
-    memcpy(mapped, srcData, sizeBytes);
-    SDL_UnmapGPUTransferBuffer(ctx->gpu, transferBuffer);
-
-    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
-    if (!copyPass) {
-        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to begin renderer copy pass: %s", SDL_GetError());
-        return false;
-    }
-
-    SDL_GPUTransferBufferLocation src = {
-        .transfer_buffer = transferBuffer,
-        .offset = 0
-    };
-
-    SDL_GPUBufferRegion dst = {
-        .buffer = gpuBuffer,
-        .offset = 0,
-        .size = sizeBytes
-    };
-
-    SDL_UploadToGPUBuffer(copyPass, &src, &dst, true);
-    SDL_EndGPUCopyPass(copyPass);
 
     return true;
 }
@@ -190,6 +80,47 @@ static Vec2 Renderer_ViewOrigin(const Renderer* renderer) {
     };
 }
 
+static bool Renderer_MatterNodeTouchesView(
+    const MatterNodeGPU* node,
+    Vec2 view_origin,
+    uint32_t view_w,
+    uint32_t view_h
+) {
+    float margin = node->radius * MATTER_RENDER_FIELD_SUPPORT_SCALE;
+    float right = view_origin.x + (float)view_w;
+    float bottom = view_origin.y + (float)view_h;
+
+    return node->pos.x + margin >= view_origin.x &&
+        node->pos.y + margin >= view_origin.y &&
+        node->pos.x - margin <= right &&
+        node->pos.y - margin <= bottom;
+}
+
+static uint32_t Renderer_CollectVisibleMatterNodes(
+    EngineContext* ctx,
+    Vec2 view_origin,
+    MatterNodeGPU* out_nodes
+) {
+    uint32_t count = 0;
+
+    for (uint32_t i = 0; i < ctx->matter.gpu_node_count; i++) {
+        const MatterNodeGPU* node = &ctx->matter.gpu_nodes[i];
+        if (!Renderer_MatterNodeTouchesView(
+                node,
+                view_origin,
+                ctx->renderer.internalW,
+                ctx->renderer.internalH
+            ))
+        {
+            continue;
+        }
+
+        out_nodes[count++] = *node;
+    }
+
+    return count;
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -198,7 +129,7 @@ bool Renderer_Init(EngineContext* ctx) {
     ctx->renderer.physicsDebugFlags = RENDERER_PHYSICS_DEBUG_DEFAULT;
 
     // Create pipelines
-    ctx->renderer.computePipeline = _CreateComputePipeline(ctx->gpu);
+    ctx->renderer.computePipeline = Renderer_CreateComputePipeline(ctx->gpu);
     if (!ctx->renderer.computePipeline) {
         SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Pipeline Creation Failed: %s", SDL_GetError());
         return false;
@@ -415,14 +346,22 @@ bool Renderer_Render(EngineContext* ctx) {
         Vec2 cursorPos = {0.0f, 0.0f};
         bool cursorVisible = Renderer_WindowToInternalPoint(ctx, ctx->input.mousePos, &cursorPos);
 
+        Vec2 viewOrigin = Renderer_ViewOrigin(&ctx->renderer);
+        MatterNodeGPU visibleMatterNodes[MAX_MATTER_NODES];
+        uint32_t visibleMatterNodeCount = Renderer_CollectVisibleMatterNodes(
+            ctx,
+            viewOrigin,
+            visibleMatterNodes
+        );
+
         ShaderUniforms uniforms = {
             .resolution = {
                 (float)ctx->renderer.internalW,
                 (float)ctx->renderer.internalH
             },
-            .matterNodeCount = ctx->matter.node_count,
+            .matterNodeCount = visibleMatterNodeCount,
             .matterThreshold = MATTER_FIELD_THRESHOLD,
-            .viewOrigin = Renderer_ViewOrigin(&ctx->renderer),
+            .viewOrigin = viewOrigin,
             .cursorPos = cursorPos,
             .cursorVisible = cursorVisible ? 1u : 0u,
             .physicsDebugFlags = ctx->renderer.physicsDebugFlags,
@@ -430,23 +369,21 @@ bool Renderer_Render(EngineContext* ctx) {
             .physicsDebugFieldWidth = PHYSICS_DEBUG_FIELD_WIDTH
         };
 
-        if (ctx->matter.dirty) {
-            if (!Renderer_UploadBuffer(
-                    ctx,
-                    cmd,
-                    ctx->renderer.matterNodeTransferBuffer,
-                    ctx->renderer.matterNodeBuffer,
-                    ctx->matter.gpu_nodes,
-                    GPU_MATTER_NODE_BUFFER_SIZE
-                ))
-            {
-                SDL_CancelGPUCommandBuffer(cmd);
-                return false;
-            }
-
-            ctx->matter.dirty = false;
+        size_t matterUploadSize = visibleMatterNodeCount * sizeof(MatterNodeGPU);
+        if (matterUploadSize > 0 &&
+            !RenderGPU_UploadBuffer(
+                ctx->gpu,
+                cmd,
+                ctx->renderer.matterNodeTransferBuffer,
+                ctx->renderer.matterNodeBuffer,
+                visibleMatterNodes,
+                matterUploadSize,
+                "matter node"
+            ))
+        {
+            SDL_CancelGPUCommandBuffer(cmd);
+            return false;
         }
-
         // ---------------------------------------------------------------------
         // Base Compute Pass
         SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(
@@ -456,6 +393,11 @@ bool Renderer_Render(EngineContext* ctx) {
             NULL,
             0
         );
+        if (!computePass) {
+            SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to begin scene compute pass: %s", SDL_GetError());
+            SDL_CancelGPUCommandBuffer(cmd);
+            return false;
+        }
 
         SDL_BindGPUComputePipeline(computePass, ctx->renderer.computePipeline);
         SDL_GPUBuffer* matterStorageBuffers[] = {ctx->renderer.matterNodeBuffer};

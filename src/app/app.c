@@ -8,7 +8,7 @@
 #include <float.h>
 
 #define PLAYER_SURFACE_SPAWN_CLEARANCE 26.0f
-#define PHYSICS_DEBUG_FLAGS RENDERER_PHYSICS_DEBUG_DEFAULT
+#define PHYSICS_DEBUG_FLAGS RENDERER_PHYSICS_DEBUG_ALL
 
 // -----------------------------------------------------------------------------
 // Internal Helpers

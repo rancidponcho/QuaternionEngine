@@ -2,6 +2,12 @@ StructuredBuffer<uint> PanelBuffer : register(t0, space0);
 
 RWTexture2D<float4> OutTex : register(u0, space1);
 
+cbuffer PanelUniforms : register(b0, space2)
+{
+    uint2 panelOrigin;
+    uint2 panelExtent;
+};
+
 #define MAX_UI_PANELS 64
 
 #define UIPANEL_META_X 0
@@ -37,14 +43,19 @@ float4 alpha_over(float4 dst, float4 src)
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
 {
-    uint texW, texH;
-    OutTex.GetDimensions(texW, texH);
-
-    if (tid.x >= texW || tid.y >= texH) {
+    if (tid.x >= panelExtent.x || tid.y >= panelExtent.y) {
         return;
     }
 
-    int2 p = int2(tid.xy);
+    uint texW, texH;
+    OutTex.GetDimensions(texW, texH);
+
+    uint2 pixel = tid.xy + panelOrigin;
+    if (pixel.x >= texW || pixel.y >= texH) {
+        return;
+    }
+
+    int2 p = int2(pixel);
     float4 outColor = OutTex[p];
 
     for (uint panelId = 0; panelId < MAX_UI_PANELS; panelId++) {

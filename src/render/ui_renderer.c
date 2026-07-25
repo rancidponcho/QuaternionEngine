@@ -3,246 +3,205 @@
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_log.h>
 #include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
 
 #include "core/engine.h"
+#include "render/gpu_common.h"
 #include "ui/ui_internal.h"
 
-#define TEXT_WORKGROUP_W 8
-#define TEXT_WORKGROUP_H 8
+#define UI_WORKGROUP_W 8
+#define UI_WORKGROUP_H 8
 #define GPU_TEXT_BUFFER_SIZE (MAX_UI_TEXT_LINES * MAX_CHARS_PER_TEXT_LINE * sizeof(uint32_t))
 #define GPU_TEXT_LINE_META_BUFFER_SIZE (MAX_UI_TEXT_LINES * UITEXTLINE_META_STRIDE * sizeof(uint32_t))
 #define GPU_PANEL_META_BUFFER_SIZE (MAX_UI_PANELS * UIPANEL_META_STRIDE * sizeof(uint32_t))
 
-static void* UIRenderer_LoadFile(const char* path, size_t* outSize) {
-    SDL_IOStream* io = SDL_IOFromFile(path, "rb");
-    if (!io) {
-        SDL_Log("UI_RENDER: Failed to open shader: %s", path);
-        return NULL;
+typedef struct UITextDispatchBounds {
+    uint32_t width;
+    uint32_t height;
+} UITextDispatchBounds;
+
+typedef struct UIPanelDispatchBounds {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} UIPanelDispatchBounds;
+
+typedef struct UIPanelUniforms {
+    uint32_t origin_x;
+    uint32_t origin_y;
+    uint32_t width;
+    uint32_t height;
+} UIPanelUniforms;
+
+static UITextDispatchBounds UIRenderer_TextDispatchBounds(EngineContext* ctx) {
+    UITextDispatchBounds bounds = {0};
+
+    for (uint32_t i = 0; i < MAX_UI_TEXT_LINES; i++) {
+        const UITextLine* line = &ctx->ui.text_lines[i];
+        if (!line->active || line->length == 0) {
+            continue;
+        }
+
+        uint32_t width = (uint32_t)line->length * ctx->assets.defaultFont.glyph_w;
+        uint32_t height = (i + 1u) * ctx->assets.defaultFont.glyph_h;
+        if (width > bounds.width) {
+            bounds.width = width;
+        }
+        if (height > bounds.height) {
+            bounds.height = height;
+        }
     }
 
-    size_t size = SDL_GetIOSize(io);
-    void* data = SDL_malloc(size);
-
-    if (SDL_ReadIO(io, data, size) != size) {
-        SDL_Log("UI_RENDER: Short read on shader: %s", path);
-        SDL_free(data);
-        SDL_CloseIO(io);
-        return NULL;
-    }
-
-    SDL_CloseIO(io);
-    if (outSize) *outSize = size;
-    return data;
+    return bounds;
 }
 
-static const char* UIRenderer_GetShaderExtension(void) {
-    #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS)
-        return "metallib";
-    #else
-        return "spv";
-    #endif
+static uint32_t UIRenderer_ColorAlpha(uint32_t rgba) {
+    return rgba & 0xffu;
+}
+
+static bool UIRenderer_PanelVisible(const UIPanel* panel) {
+    if (!panel->active) {
+        return false;
+    }
+
+    if (UIRenderer_ColorAlpha(panel->style.fill_color) > 0u) {
+        return true;
+    }
+
+    return panel->style.border > 0 &&
+        UIRenderer_ColorAlpha(panel->style.border_color) > 0u;
+}
+
+static UIPanelDispatchBounds UIRenderer_PanelDispatchBounds(EngineContext* ctx) {
+    UIPanelDispatchBounds bounds = {0};
+    int min_x = (int)ctx->renderer.internalW;
+    int min_y = (int)ctx->renderer.internalH;
+    int max_x = 0;
+    int max_y = 0;
+
+    for (uint32_t i = 0; i < MAX_UI_PANELS; i++) {
+        const UIPanel* panel = &ctx->ui.panels[i];
+        if (!UIRenderer_PanelVisible(panel) || panel->width == 0 || panel->height == 0) {
+            continue;
+        }
+
+        int panel_min_x = panel->x;
+        int panel_min_y = panel->y;
+        int panel_max_x = panel->x + (int)panel->width;
+        int panel_max_y = panel->y + (int)panel->height;
+
+        if (panel_max_x <= 0 ||
+            panel_max_y <= 0 ||
+            panel_min_x >= (int)ctx->renderer.internalW ||
+            panel_min_y >= (int)ctx->renderer.internalH)
+        {
+            continue;
+        }
+
+        if (panel_min_x < 0) panel_min_x = 0;
+        if (panel_min_y < 0) panel_min_y = 0;
+        if (panel_max_x > (int)ctx->renderer.internalW) panel_max_x = (int)ctx->renderer.internalW;
+        if (panel_max_y > (int)ctx->renderer.internalH) panel_max_y = (int)ctx->renderer.internalH;
+
+        if (panel_min_x < min_x) min_x = panel_min_x;
+        if (panel_min_y < min_y) min_y = panel_min_y;
+        if (panel_max_x > max_x) max_x = panel_max_x;
+        if (panel_max_y > max_y) max_y = panel_max_y;
+    }
+
+    if (max_x <= min_x || max_y <= min_y) {
+        return bounds;
+    }
+
+    bounds.x = (uint32_t)min_x;
+    bounds.y = (uint32_t)min_y;
+    bounds.width = (uint32_t)(max_x - min_x);
+    bounds.height = (uint32_t)(max_y - min_y);
+    return bounds;
 }
 
 static SDL_GPUComputePipeline* UIRenderer_CreateTextOverlayPipeline(SDL_GPUDevice* gpu) {
-    char shaderPath[256];
-    const char* ext = UIRenderer_GetShaderExtension();
-    const char* basePath = SDL_GetBasePath();
-
-    if (basePath) {
-        snprintf(shaderPath, sizeof(shaderPath), "%sassets/shaders/TextOverlayCompute.%s", basePath, ext);
-    } else {
-        snprintf(shaderPath, sizeof(shaderPath), "shaders/TextOverlayCompute.%s", ext);
-    }
-
-    size_t codeSize = 0;
-    void* code = UIRenderer_LoadFile(shaderPath, &codeSize);
-    if (!code) return NULL;
-
-    const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
-
-    SDL_GPUComputePipelineCreateInfo pipelineInfo = {
-        .code = code,
-        .code_size = codeSize,
-        .entrypoint = entryPoint,
-        .format = Engine_GetShaderFormat(),
-
-        .num_samplers = 1,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 2,
-        .num_readwrite_storage_textures = 1,
-        .num_readwrite_storage_buffers = 0,
-        .num_uniform_buffers = 0,
-
-        .threadcount_x = 8,
-        .threadcount_y = 8,
-        .threadcount_z = 1,
-        .props = 0
+    RenderGPUComputePipelineInfo pipeline_info = {
+        .sampler_count = 1,
+        .storage_buffer_count = 2,
+        .uniform_buffer_count = 0,
+        .thread_count_x = 8,
+        .thread_count_y = 8,
+        .thread_count_z = 1
     };
 
-    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
-    SDL_free(code);
-
-    return pipeline;
+    return RenderGPU_CreateComputePipeline(gpu, "TextOverlayCompute", &pipeline_info);
 }
 
 static SDL_GPUComputePipeline* UIRenderer_CreatePanelPipeline(SDL_GPUDevice* gpu) {
-    char shaderPath[256];
-    const char* ext = UIRenderer_GetShaderExtension();
-    const char* basePath = SDL_GetBasePath();
-
-    if (basePath) {
-        snprintf(shaderPath, sizeof(shaderPath), "%sassets/shaders/UIPanelCompute.%s", basePath, ext);
-    } else {
-        snprintf(shaderPath, sizeof(shaderPath), "shaders/UIPanelCompute.%s", ext);
-    }
-
-    size_t codeSize = 0;
-    void* code = UIRenderer_LoadFile(shaderPath, &codeSize);
-    if (!code) return NULL;
-
-    const char* entryPoint = (Engine_GetShaderFormat() == SDL_GPU_SHADERFORMAT_METALLIB) ? "main0" : "main";
-
-    SDL_GPUComputePipelineCreateInfo pipelineInfo = {
-        .code = code,
-        .code_size = codeSize,
-        .entrypoint = entryPoint,
-        .format = Engine_GetShaderFormat(),
-
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 1,
-        .num_readwrite_storage_textures = 1,
-        .num_readwrite_storage_buffers = 0,
-        .num_uniform_buffers = 0,
-
-        .threadcount_x = 8,
-        .threadcount_y = 8,
-        .threadcount_z = 1,
-        .props = 0
+    RenderGPUComputePipelineInfo pipeline_info = {
+        .sampler_count = 0,
+        .storage_buffer_count = 1,
+        .uniform_buffer_count = 1,
+        .thread_count_x = 8,
+        .thread_count_y = 8,
+        .thread_count_z = 1
     };
 
-    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(gpu, &pipelineInfo);
-    SDL_free(code);
-
-    return pipeline;
+    return RenderGPU_CreateComputePipeline(gpu, "UIPanelCompute", &pipeline_info);
 }
 
 static bool UIRenderer_CreateBuffers(EngineContext* ctx) {
     UIRenderer* uiRenderer = &ctx->renderer.uiRenderer;
 
-    SDL_GPUBufferCreateInfo panelBufferInfo = {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
-        .size = GPU_PANEL_META_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->panelBuffer = SDL_CreateGPUBuffer(ctx->gpu, &panelBufferInfo);
+    uiRenderer->panelBuffer = RenderGPU_CreateStorageBuffer(
+        ctx->gpu,
+        GPU_PANEL_META_BUFFER_SIZE,
+        "UI panel"
+    );
     if (!uiRenderer->panelBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create GPU panel buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUBufferCreateInfo textBufferInfo = {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
-        .size = GPU_TEXT_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->textBuffer = SDL_CreateGPUBuffer(ctx->gpu, &textBufferInfo);
+    uiRenderer->textBuffer = RenderGPU_CreateStorageBuffer(
+        ctx->gpu,
+        GPU_TEXT_BUFFER_SIZE,
+        "UI text"
+    );
     if (!uiRenderer->textBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create GPU text buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUBufferCreateInfo metaBufferInfo = {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
-        .size = GPU_TEXT_LINE_META_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->textMetaBuffer = SDL_CreateGPUBuffer(ctx->gpu, &metaBufferInfo);
+    uiRenderer->textMetaBuffer = RenderGPU_CreateStorageBuffer(
+        ctx->gpu,
+        GPU_TEXT_LINE_META_BUFFER_SIZE,
+        "UI text line meta"
+    );
     if (!uiRenderer->textMetaBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create GPU text line meta buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo panelTransferInfo = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = GPU_PANEL_META_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->panelTransferBuffer = SDL_CreateGPUTransferBuffer(ctx->gpu, &panelTransferInfo);
+    uiRenderer->panelTransferBuffer = RenderGPU_CreateUploadTransferBuffer(
+        ctx->gpu,
+        GPU_PANEL_META_BUFFER_SIZE,
+        "UI panel"
+    );
     if (!uiRenderer->panelTransferBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create panel transfer buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo textTransferInfo = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = GPU_TEXT_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->textTransferBuffer = SDL_CreateGPUTransferBuffer(ctx->gpu, &textTransferInfo);
+    uiRenderer->textTransferBuffer = RenderGPU_CreateUploadTransferBuffer(
+        ctx->gpu,
+        GPU_TEXT_BUFFER_SIZE,
+        "UI text"
+    );
     if (!uiRenderer->textTransferBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create text transfer buffer: %s", SDL_GetError());
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo metaTransferInfo = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = GPU_TEXT_LINE_META_BUFFER_SIZE,
-        .props = 0
-    };
-
-    uiRenderer->textMetaTransferBuffer = SDL_CreateGPUTransferBuffer(ctx->gpu, &metaTransferInfo);
+    uiRenderer->textMetaTransferBuffer = RenderGPU_CreateUploadTransferBuffer(
+        ctx->gpu,
+        GPU_TEXT_LINE_META_BUFFER_SIZE,
+        "UI text line meta"
+    );
     if (!uiRenderer->textMetaTransferBuffer) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_RENDER, "Failed to create text line meta transfer buffer: %s", SDL_GetError());
         return false;
     }
-
-    return true;
-}
-
-static bool UIRenderer_UploadBuffer(
-    EngineContext* ctx,
-    SDL_GPUCommandBuffer* cmd,
-    SDL_GPUTransferBuffer* transferBuffer,
-    SDL_GPUBuffer* gpuBuffer,
-    const void* srcData,
-    size_t sizeBytes
-) {
-    void* mapped = SDL_MapGPUTransferBuffer(ctx->gpu, transferBuffer, true);
-    if (!mapped) {
-        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to map transfer buffer: %s", SDL_GetError());
-        return false;
-    }
-
-    memcpy(mapped, srcData, sizeBytes);
-    SDL_UnmapGPUTransferBuffer(ctx->gpu, transferBuffer);
-
-    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
-    if (!copyPass) {
-        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Failed to begin copy pass: %s", SDL_GetError());
-        return false;
-    }
-
-    SDL_GPUTransferBufferLocation src = {
-        .transfer_buffer = transferBuffer,
-        .offset = 0
-    };
-
-    SDL_GPUBufferRegion dst = {
-        .buffer = gpuBuffer,
-        .offset = 0,
-        .size = sizeBytes
-    };
-
-    SDL_UploadToGPUBuffer(copyPass, &src, &dst, true);
-    SDL_EndGPUCopyPass(copyPass);
 
     return true;
 }
@@ -251,13 +210,14 @@ static bool UIRenderer_UploadDirtyBuffers(EngineContext* ctx, SDL_GPUCommandBuff
     UIRenderer* uiRenderer = &ctx->renderer.uiRenderer;
 
     if (ctx->ui.panel_dirty) {
-        if (!UIRenderer_UploadBuffer(
-                ctx,
+        if (!RenderGPU_UploadBuffer(
+                ctx->gpu,
                 cmd,
                 uiRenderer->panelTransferBuffer,
                 uiRenderer->panelBuffer,
                 ctx->ui.panel_meta_buffer,
-                GPU_PANEL_META_BUFFER_SIZE
+                GPU_PANEL_META_BUFFER_SIZE,
+                "UI panel"
             ))
         {
             return false;
@@ -267,13 +227,14 @@ static bool UIRenderer_UploadDirtyBuffers(EngineContext* ctx, SDL_GPUCommandBuff
     }
 
     if (ctx->ui.text_dirty) {
-        if (!UIRenderer_UploadBuffer(
-                ctx,
+        if (!RenderGPU_UploadBuffer(
+                ctx->gpu,
                 cmd,
                 uiRenderer->textTransferBuffer,
                 uiRenderer->textBuffer,
                 ctx->ui.text_buffer,
-                GPU_TEXT_BUFFER_SIZE
+                GPU_TEXT_BUFFER_SIZE,
+                "UI text"
             ))
         {
             return false;
@@ -283,13 +244,14 @@ static bool UIRenderer_UploadDirtyBuffers(EngineContext* ctx, SDL_GPUCommandBuff
     }
 
     if (ctx->ui.text_meta_dirty) {
-        if (!UIRenderer_UploadBuffer(
-                ctx,
+        if (!RenderGPU_UploadBuffer(
+                ctx->gpu,
                 cmd,
                 uiRenderer->textMetaTransferBuffer,
                 uiRenderer->textMetaBuffer,
                 ctx->ui.text_meta_buffer,
-                GPU_TEXT_LINE_META_BUFFER_SIZE
+                GPU_TEXT_LINE_META_BUFFER_SIZE,
+                "UI text meta"
             ))
         {
             return false;
@@ -307,6 +269,10 @@ static bool UIRenderer_RenderPanelPass(
     const SDL_GPUStorageTextureReadWriteBinding* outputBinding
 ) {
     UIRenderer* uiRenderer = &ctx->renderer.uiRenderer;
+    UIPanelDispatchBounds bounds = UIRenderer_PanelDispatchBounds(ctx);
+    if (bounds.width == 0 || bounds.height == 0) {
+        return true;
+    }
 
     SDL_GPUComputePass* panelPass = SDL_BeginGPUComputePass(
         cmd,
@@ -326,7 +292,18 @@ static bool UIRenderer_RenderPanelPass(
 
     SDL_BindGPUComputePipeline(panelPass, uiRenderer->panelPipeline);
     SDL_BindGPUComputeStorageBuffers(panelPass, 0, panelStorageBuffers, 1);
-    SDL_DispatchGPUCompute(panelPass, ctx->renderer.dispatchX, ctx->renderer.dispatchY, 1);
+
+    UIPanelUniforms uniforms = {
+        .origin_x = bounds.x,
+        .origin_y = bounds.y,
+        .width = bounds.width,
+        .height = bounds.height
+    };
+    SDL_PushGPUComputeUniformData(cmd, 0, &uniforms, sizeof(uniforms));
+
+    uint32_t dispatchX = (bounds.width + UI_WORKGROUP_W - 1) / UI_WORKGROUP_W;
+    uint32_t dispatchY = (bounds.height + UI_WORKGROUP_H - 1) / UI_WORKGROUP_H;
+    SDL_DispatchGPUCompute(panelPass, dispatchX, dispatchY, 1);
     SDL_EndGPUComputePass(panelPass);
 
     return true;
@@ -337,6 +314,11 @@ static bool UIRenderer_RenderTextPass(
     SDL_GPUCommandBuffer* cmd,
     const SDL_GPUStorageTextureReadWriteBinding* outputBinding
 ) {
+    UITextDispatchBounds bounds = UIRenderer_TextDispatchBounds(ctx);
+    if (bounds.width == 0 || bounds.height == 0) {
+        return true;
+    }
+
     UIRenderer* uiRenderer = &ctx->renderer.uiRenderer;
 
     SDL_GPUComputePass* textPass = SDL_BeginGPUComputePass(
@@ -365,10 +347,8 @@ static bool UIRenderer_RenderTextPass(
     SDL_BindGPUComputeSamplers(textPass, 0, &fontBinding, 1);
     SDL_BindGPUComputeStorageBuffers(textPass, 0, textStorageBuffers, 2);
 
-    uint32_t textPixelsWide = MAX_CHARS_PER_TEXT_LINE * ctx->assets.defaultFont.glyph_w;
-    uint32_t textPixelsHigh = MAX_UI_TEXT_LINES * ctx->assets.defaultFont.glyph_h;
-    uint32_t textDispatchX = (textPixelsWide + TEXT_WORKGROUP_W - 1) / TEXT_WORKGROUP_W;
-    uint32_t textDispatchY = (textPixelsHigh + TEXT_WORKGROUP_H - 1) / TEXT_WORKGROUP_H;
+    uint32_t textDispatchX = (bounds.width + UI_WORKGROUP_W - 1) / UI_WORKGROUP_W;
+    uint32_t textDispatchY = (bounds.height + UI_WORKGROUP_H - 1) / UI_WORKGROUP_H;
 
     SDL_DispatchGPUCompute(textPass, textDispatchX, textDispatchY, 1);
     SDL_EndGPUComputePass(textPass);

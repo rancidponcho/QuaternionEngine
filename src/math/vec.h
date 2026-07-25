@@ -12,8 +12,16 @@ typedef struct Vec2 {
     float y;
 } Vec2;
 
+static inline float Vec2_Dot(Vec2 a, Vec2 b) {
+    return a.x * b.x + a.y * b.y;
+}
+
+static inline float Vec2_LengthSq(Vec2 v) {
+    return Vec2_Dot(v, v);
+}
+
 static inline Vec2 Vec2_Normalize(Vec2 v) {
-    float len = sqrtf(v.x * v.x + v.y * v.y);
+    float len = sqrtf(Vec2_LengthSq(v));
     if (len > 0.0001f) {
         float inv = 1.0f / len;
         return (Vec2){ v.x * inv, v.y * inv };
@@ -23,6 +31,10 @@ static inline Vec2 Vec2_Normalize(Vec2 v) {
 
 static inline Vec2 Vec2_Sub(Vec2 a, Vec2 b) {
     return (Vec2){ a.x - b.x, a.y - b.y };
+}
+
+static inline float Vec2_DistanceSq(Vec2 a, Vec2 b) {
+    return Vec2_LengthSq(Vec2_Sub(a, b));
 }
 
 static inline Vec2 Vec2_Add(Vec2 a, Vec2 b) {

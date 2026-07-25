@@ -11,6 +11,13 @@
 #define PHYSICS_DEBUG_CIRCLES 0x02u
 #define MATTER_FIELD_SUPPORT_SCALE 2.25
 #define MATTER_FIELD_SUPPORT_STRENGTH 1.552819
+#define PLAYER_FIELD_SUPPORT_SCALE 1.82
+#define PLAYER_FIELD_DENSITY_MIN 1.00
+#define PLAYER_FIELD_DENSITY_MAX 1.45
+#define MATTER_SHADE_EDGE_WIDTH 2.0
+#define MATTER_SHADE_MID_WIDTH 3.6
+#define MATTER_SHADE_INNER_WIDTH 5.0
+#define MATTER_FIELD_GRADIENT_MIN 0.001
 
 cbuffer Uniforms : register(b0, space2)
 {
@@ -37,6 +44,7 @@ StructuredBuffer<MatterNode> MatterNodes : register(t0, space0);
 
 struct MatterSample {
     float field;
+    float2 gradient;
     uint material;
     float seam;
 };
@@ -66,9 +74,19 @@ uint nodeIsland(MatterNode node)
     return node.material >> 8u;
 }
 
-float matterContribution(MatterNode node, float2 p)
+float matterContribution(MatterNode node, uint material, float2 p, out float2 gradient)
 {
-    float supportRadius = node.radius * MATTER_FIELD_SUPPORT_SCALE;
+    gradient = float2(0.0, 0.0);
+
+    float supportScale = MATTER_FIELD_SUPPORT_SCALE;
+    float strength = MATTER_FIELD_SUPPORT_STRENGTH;
+    if (material == MATERIAL_PLAYER) {
+        float torsoWeight = smoothstep(4.5, 6.6, node.radius);
+        supportScale = PLAYER_FIELD_SUPPORT_SCALE;
+        strength *= lerp(PLAYER_FIELD_DENSITY_MIN, PLAYER_FIELD_DENSITY_MAX, torsoWeight);
+    }
+
+    float supportRadius = node.radius * supportScale;
     float supportSq = supportRadius * supportRadius;
     float2 delta = p - node.pos;
     float distanceSq = dot(delta, delta);
@@ -78,7 +96,8 @@ float matterContribution(MatterNode node, float2 p)
     }
 
     float edge = 1.0 - distanceSq / supportSq;
-    return MATTER_FIELD_SUPPORT_STRENGTH * edge * edge;
+    gradient = -4.0 * strength * edge * delta / supportSq;
+    return strength * edge * edge;
 }
 
 MatterSample sampleMatter(float2 p)
@@ -87,6 +106,10 @@ MatterSample sampleMatter(float2 p)
     float gelField = 0.0;
     float ironField = 0.0;
     float playerField = 0.0;
+    float2 mudGradient = float2(0.0, 0.0);
+    float2 gelGradient = float2(0.0, 0.0);
+    float2 ironGradient = float2(0.0, 0.0);
+    float2 playerGradient = float2(0.0, 0.0);
     float bestContribution = 0.0;
     float nextContribution = 0.0;
     uint bestMaterial = MATERIAL_MUD;
@@ -97,14 +120,18 @@ MatterSample sampleMatter(float2 p)
     [loop]
     for (uint i = 0; i < matterNodeCount; i++) {
         MatterNode node = MatterNodes[i];
-        float contribution = matterContribution(node, p);
-        uint material = nodeMaterial(node);
-        uint island = nodeIsland(node);
+        if (node.radius <= 0.0) {
+            continue;
+        }
 
+        uint material = nodeMaterial(node);
+        float2 contributionGradient;
+        float contribution = matterContribution(node, material, p, contributionGradient);
         if (contribution <= 0.0) {
             continue;
         }
 
+        uint island = nodeIsland(node);
         if (contribution > bestContribution) {
             nextContribution = bestContribution;
             nextMaterial = bestMaterial;
@@ -120,30 +147,38 @@ MatterSample sampleMatter(float2 p)
 
         if (material == MATERIAL_GEL) {
             gelField += contribution;
+            gelGradient += contributionGradient;
         } else if (material == MATERIAL_IRON) {
             ironField += contribution;
+            ironGradient += contributionGradient;
         } else if (material == MATERIAL_PLAYER) {
             playerField += contribution;
+            playerGradient += contributionGradient;
         } else {
             mudField += contribution;
+            mudGradient += contributionGradient;
         }
     }
 
     MatterSample sample;
     sample.field = mudField;
+    sample.gradient = mudGradient;
     sample.material = MATERIAL_MUD;
     sample.seam = 0.0;
 
     if (gelField > sample.field) {
         sample.field = gelField;
+        sample.gradient = gelGradient;
         sample.material = MATERIAL_GEL;
     }
     if (ironField > sample.field) {
         sample.field = ironField;
+        sample.gradient = ironGradient;
         sample.material = MATERIAL_IRON;
     }
     if (playerField > sample.field) {
         sample.field = playerField;
+        sample.gradient = playerGradient;
         sample.material = MATERIAL_PLAYER;
     }
 
@@ -164,14 +199,19 @@ MatterSample sampleMatter(float2 p)
 float3 shadeMatter(MatterSample matter, float2 p)
 {
     float3 color = materialColor(matter.material);
-    float depth = saturate((matter.field - matterThreshold) * 0.7);
-    float edge = 1.0 - smoothstep(0.0, 0.24, depth);
-    float shade = 0.80 + 0.15 * step(0.32, depth) + 0.08 * step(0.68, depth);
+    float surfaceDistance =
+        max(matter.field - matterThreshold, 0.0) /
+        max(length(matter.gradient), MATTER_FIELD_GRADIENT_MIN);
+    float edge = 1.0 - smoothstep(0.0, MATTER_SHADE_EDGE_WIDTH, surfaceDistance);
+    float shade =
+        0.80 +
+        0.15 * smoothstep(MATTER_SHADE_EDGE_WIDTH, MATTER_SHADE_MID_WIDTH, surfaceDistance) +
+        0.08 * smoothstep(MATTER_SHADE_MID_WIDTH, MATTER_SHADE_INNER_WIDTH, surfaceDistance);
     float grain = ((((uint)p.x ^ ((uint)p.y * 3u)) & 1u) == 0u) ? 0.97 : 1.0;
 
     if (matter.material == MATERIAL_IRON) {
-        edge = 1.0 - step(0.18, depth);
-        shade = 0.88 + 0.10 * step(0.45, depth);
+        edge = 1.0 - step(MATTER_SHADE_EDGE_WIDTH, surfaceDistance);
+        shade = 0.88 + 0.10 * step(MATTER_SHADE_MID_WIDTH, surfaceDistance);
         grain = ((((uint)p.x + ((uint)p.y * 5u)) & 3u) == 0u) ? 0.98 : 1.0;
     }
 
@@ -237,10 +277,11 @@ void main(uint3 id : SV_DispatchThreadID)
     float2 worldP = p + viewOrigin;
     MatterSample matter = sampleMatter(worldP);
 
-    float surface = (matter.field >= matterThreshold) ? 1.0 : 0.0;
-
     float3 background = float3(0.055, 0.065, 0.075);
-    float3 color = lerp(background, shadeMatter(matter, p), surface);
+    float3 color = background;
+    if (matter.field >= matterThreshold) {
+        color = shadeMatter(matter, p);
+    }
     color = applyPhysicsDebug(worldP, matter, color);
     color = applyCursor(p, color);
 

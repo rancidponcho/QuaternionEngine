@@ -85,12 +85,12 @@ typedef struct MatterWorld {
     int32_t grid_cell_y[MAX_MATTER_NODES];
 
     uint32_t node_count;
+    uint32_t gpu_node_count;
     uint32_t constraint_count;
     uint32_t bend_constraint_count;
     uint32_t island_count;
     float time;
     float grid_max_radius;
-    bool dirty;
     bool constraint_graph_dirty;
     bool constraint_graph_stale;
     bool islands_dirty;
@@ -111,7 +111,31 @@ void MatterWorld_GeneratePlanet(
     uint32_t node_count,
     uint32_t seed
 );
-bool MatterWorld_AddTardigradeBody(MatterWorld* world, Vec2 center, uint16_t out_nodes[3]);
+uint32_t Matter_MaterialMask(MaterialId material);
+uint32_t Matter_TerrainMaterialMask(void);
+bool MatterWorld_AddMaterialNode(
+    MatterWorld* world,
+    Vec2 pos,
+    float radius,
+    MaterialId material,
+    uint16_t* out_node
+);
+bool MatterWorld_AddDistanceLink(
+    MatterWorld* world,
+    uint16_t a,
+    uint16_t b,
+    float rest_length,
+    float stiffness
+);
+void MatterWorld_FinalizeEdits(MatterWorld* world);
+uint32_t MatterWorld_QueryNodes(
+    MatterWorld* world,
+    Vec2 center,
+    float radius,
+    uint32_t material_mask,
+    uint16_t* out_nodes,
+    uint32_t max_nodes
+);
 void MatterWorld_ApplyForceToNode(MatterWorld* world, uint16_t node_id, Vec2 force, float dt);
 void MatterWorld_ApplyForceBetweenNodes(
     MatterWorld* world,

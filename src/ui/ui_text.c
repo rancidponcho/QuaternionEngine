@@ -6,13 +6,7 @@
 #include "ui/text_layout.h"
 
 static uint32_t UI_TextLineFlags(const UITextLine* line) {
-    uint32_t flags = 0;
-
-    if (line->active) {
-        flags |= UITEXTLINE_FLAG_ACTIVE;
-    }
-
-    return flags;
+    return line->active ? UITEXTLINE_FLAG_ACTIVE : 0u;
 }
 
 static void UI_UpdateTextLineLayout(UITextLine* line) {
@@ -52,7 +46,6 @@ static void UI_ResetTextLine(UI* ui, uint32_t id) {
     line->owner_panel = UI_INVALID_ID;
     line->next_id = UI_INVALID_ID;
     line->active = false;
-    line->dirty = false;
     line->style = UI_DEFAULT_TEXT_LINE_STYLE;
 
     memset(ui->text_buffer[id], 0, sizeof(ui->text_buffer[id]));
@@ -86,7 +79,6 @@ uint32_t UI_AllocTextLine(UI* ui, int x, int y, const UIStyle* style, uint32_t o
     line->next_id = UI_INVALID_ID;
     line->style = style ? *style : UI_DEFAULT_TEXT_LINE_STYLE;
     line->active = true;
-    line->dirty = false;
 
     UI_UpdateTextLineLayout(line);
     UI_UpdateTextLineMeta(ui, line);
@@ -108,14 +100,9 @@ bool UI_WriteTextLineChars(UI* ui, UITextLine* line, const char* text, uint16_t 
         ui->text_buffer[id][i] = (uint32_t)(unsigned char)text[i];
     }
 
-    for (uint16_t i = length; i < MAX_CHARS_PER_TEXT_LINE; i++) {
-        ui->text_buffer[id][i] = 0;
-    }
-
     line->length = length;
     UI_UpdateTextLineLayout(line);
     UI_UpdateTextLineMeta(ui, line);
-    line->dirty = true;
 
     ui->text_dirty = true;
     ui->text_meta_dirty = true;

@@ -51,7 +51,6 @@ typedef struct UITextLine {
     uint32_t next_id;
     UIStyle style;
     bool active;
-    bool dirty;
 } UITextLine;
 
 typedef struct UIPanel {
@@ -66,7 +65,6 @@ typedef struct UIPanel {
     char text[MAX_CHARS_PER_PANEL_TEXT + 1];
     UIStyle style;
     bool active;
-    bool dirty;
 } UIPanel;
 
 struct UI {

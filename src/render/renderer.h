@@ -18,8 +18,9 @@ typedef struct EngineContext EngineContext;
 
 #define RENDERER_PHYSICS_DEBUG_FIELD   0x01u
 #define RENDERER_PHYSICS_DEBUG_CIRCLES 0x02u
-#define RENDERER_PHYSICS_DEBUG_DEFAULT \
+#define RENDERER_PHYSICS_DEBUG_ALL \
     (RENDERER_PHYSICS_DEBUG_FIELD | RENDERER_PHYSICS_DEBUG_CIRCLES)
+#define RENDERER_PHYSICS_DEBUG_DEFAULT 0u
 
 typedef struct Renderer {
     SDL_GPUComputePipeline* computePipeline;
@@ -36,12 +37,11 @@ typedef struct Renderer {
     Uint32 internalH;      // Game logic size (e.g., 720)
     Uint32 outputW;        // OS Window width
     Uint32 outputH;        // OS Window height
-                           //
     Uint32 dispatchX;      // Derived from internalW
     Uint32 dispatchY;      // Derived from internalH
     Uint32 physicsDebugFlags;
 
-    SDL_Rect                viewport;       // Letterbox destination rect
+    SDL_Rect viewport;     // Letterbox destination rect
 } Renderer;
 
 // -----------------------------------------------------------------------------
