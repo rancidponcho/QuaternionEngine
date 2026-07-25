@@ -11,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "render/renderer.h"
 #include "assets/assets.h"
@@ -48,6 +49,17 @@ typedef struct EngineContext {
         double total;
         Uint64 lastTick;
     } time;
+
+    struct {
+        float update_ms;
+        float mining_ms;
+        float player_ms;
+        float gravity_ms;
+        float matter_ms;
+        float render_ms;
+        uint32_t mining_nodes;
+        float mining_area;
+    } profile;
 } EngineContext;
 
 // -----------------------------------------------------------------------------

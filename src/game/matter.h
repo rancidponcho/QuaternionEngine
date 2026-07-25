@@ -17,6 +17,7 @@
 
 typedef enum MaterialId {
     MATERIAL_MUD = 0,
+    MATERIAL_ROCK,
     MATERIAL_GEL,
     MATERIAL_IRON,
     MATERIAL_PLAYER,
@@ -67,6 +68,11 @@ typedef struct MatterIsland {
     uint32_t material_mask;
     bool active;
 } MatterIsland;
+
+typedef struct MatterMiningResult {
+    uint32_t affected_nodes;
+    float removed_area;
+} MatterMiningResult;
 
 typedef struct MatterWorld {
     MatterNode nodes[MAX_MATTER_NODES];
@@ -154,7 +160,7 @@ void MatterWorld_ApplyConstraintTargetForce(
 );
 void MatterWorld_ApplyIslandGravityToMatter(MatterWorld* world, float dt);
 void MatterWorld_ApplyIslandGravityToMaterial(MatterWorld* world, MaterialId material, float dt);
-uint32_t MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount);
+MatterMiningResult MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount);
 void MatterWorld_Update(MatterWorld* world, float dt);
 
 #endif // GAME_MATTER_H

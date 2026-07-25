@@ -18,6 +18,8 @@ typedef struct MaterialDef {
     float structural_range_scale;
     float bond_min_closing_speed;
     float bond_stiffness;
+    float mining_damage_scale;
+    float velocity_limit;
 } MaterialDef;
 
 const MaterialDef* Matter_GetMaterialDef(MaterialId material);

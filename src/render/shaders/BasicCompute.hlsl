@@ -3,9 +3,10 @@
 // - RW storage textures live in (u#, space1) -> descriptor set 1
 
 #define MATERIAL_MUD  0u
-#define MATERIAL_GEL  1u
-#define MATERIAL_IRON 2u
-#define MATERIAL_PLAYER 3u
+#define MATERIAL_ROCK 1u
+#define MATERIAL_GEL  2u
+#define MATERIAL_IRON 3u
+#define MATERIAL_PLAYER 4u
 #define MATERIAL_MASK 0xffu
 #define PHYSICS_DEBUG_FIELD   0x01u
 #define PHYSICS_DEBUG_CIRCLES 0x02u
@@ -52,7 +53,10 @@ struct MatterSample {
 float3 materialColor(uint material)
 {
     if (material == MATERIAL_GEL) {
-        return float3(0.30, 0.63, 0.53);
+        return float3(0.22, 0.72, 0.62);
+    }
+    if (material == MATERIAL_ROCK) {
+        return float3(0.44, 0.41, 0.36);
     }
     if (material == MATERIAL_IRON) {
         return float3(0.56, 0.60, 0.63);
@@ -103,10 +107,12 @@ float matterContribution(MatterNode node, uint material, float2 p, out float2 gr
 MatterSample sampleMatter(float2 p)
 {
     float mudField = 0.0;
+    float rockField = 0.0;
     float gelField = 0.0;
     float ironField = 0.0;
     float playerField = 0.0;
     float2 mudGradient = float2(0.0, 0.0);
+    float2 rockGradient = float2(0.0, 0.0);
     float2 gelGradient = float2(0.0, 0.0);
     float2 ironGradient = float2(0.0, 0.0);
     float2 playerGradient = float2(0.0, 0.0);
@@ -148,6 +154,9 @@ MatterSample sampleMatter(float2 p)
         if (material == MATERIAL_GEL) {
             gelField += contribution;
             gelGradient += contributionGradient;
+        } else if (material == MATERIAL_ROCK) {
+            rockField += contribution;
+            rockGradient += contributionGradient;
         } else if (material == MATERIAL_IRON) {
             ironField += contribution;
             ironGradient += contributionGradient;
@@ -171,6 +180,11 @@ MatterSample sampleMatter(float2 p)
         sample.gradient = gelGradient;
         sample.material = MATERIAL_GEL;
     }
+    if (rockField > sample.field) {
+        sample.field = rockField;
+        sample.gradient = rockGradient;
+        sample.material = MATERIAL_ROCK;
+    }
     if (ironField > sample.field) {
         sample.field = ironField;
         sample.gradient = ironGradient;
@@ -182,15 +196,16 @@ MatterSample sampleMatter(float2 p)
         sample.material = MATERIAL_PLAYER;
     }
 
-    if (sample.field >= matterThreshold && bestIsland != nextIsland && nextContribution > 0.0) {
+    bool differentIsland = bestIsland != nextIsland;
+    bool differentMaterial = bestMaterial != nextMaterial;
+    if (sample.field >= matterThreshold &&
+        nextContribution > 0.0 &&
+        (differentIsland || differentMaterial))
+    {
         float balance = nextContribution / max(bestContribution, 0.0001);
         float seam = smoothstep(0.58, 0.94, balance);
         seam *= smoothstep(0.12, 0.65, nextContribution);
-        if (sample.material == MATERIAL_IRON && bestMaterial != nextMaterial) {
-            sample.seam = 0.0;
-        } else {
-            sample.seam = (bestMaterial == nextMaterial) ? seam : seam * 0.45;
-        }
+        sample.seam = differentMaterial ? seam * 0.38 : seam;
     }
 
     return sample;
@@ -209,7 +224,11 @@ float3 shadeMatter(MatterSample matter, float2 p)
         0.08 * smoothstep(MATTER_SHADE_MID_WIDTH, MATTER_SHADE_INNER_WIDTH, surfaceDistance);
     float grain = ((((uint)p.x ^ ((uint)p.y * 3u)) & 1u) == 0u) ? 0.97 : 1.0;
 
-    if (matter.material == MATERIAL_IRON) {
+    if (matter.material == MATERIAL_ROCK) {
+        shade = 0.78 + 0.14 * step(MATTER_SHADE_EDGE_WIDTH, surfaceDistance) +
+            0.07 * step(MATTER_SHADE_INNER_WIDTH, surfaceDistance);
+        grain = ((((uint)p.x * 3u + ((uint)p.y * 7u)) & 7u) <= 1u) ? 0.94 : 1.0;
+    } else if (matter.material == MATERIAL_IRON) {
         edge = 1.0 - step(MATTER_SHADE_EDGE_WIDTH, surfaceDistance);
         shade = 0.88 + 0.10 * step(MATTER_SHADE_MID_WIDTH, surfaceDistance);
         grain = ((((uint)p.x + ((uint)p.y * 5u)) & 3u) == 0u) ? 0.98 : 1.0;

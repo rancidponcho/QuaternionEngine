@@ -6,6 +6,9 @@
 #include "game/matter_internal.h"
 
 #define MATTER_TAU 6.2831853f
+#define MATTER_PI 3.1415927f
+#define MATTER_MIN_NODE_RADIUS 0.75f
+#define MATTER_MINING_AREA_DAMAGE_SCALE 9.0f
 #define MATTER_VISUAL_BRIDGE_SAMPLE_STEP 1.75f
 #define MATTER_VISUAL_BRIDGE_MIN_SAMPLES 5u
 #define MATTER_VISUAL_BRIDGE_MAX_SAMPLES 18u
@@ -35,8 +38,9 @@
 #define MATTER_PLANET_PLACEMENT_ATTEMPTS_PER_NODE 220u
 #define MATTER_PLANET_PLACEMENT_MIN_DISTANCE_SCALE 0.62f
 #define MATTER_PLANET_RANDOM_CANDIDATE_CHANCE 0.22f
+#define MATTER_PLANET_MUD_CLUSTER_COUNT 5u
 #define MATTER_PLANET_GEL_CLUSTER_COUNT 2u
-#define MATTER_PLANET_IRON_CLUSTER_COUNT 7u
+#define MATTER_PLANET_IRON_CLUSTER_COUNT 12u
 #define MATTER_ASTEROID_BASE_RADIUS_SCALE 0.72f
 #define MATTER_ASTEROID_SURFACE_PRUNE_DEPTH 2.2f
 #define MATTER_ASTEROID_SURFACE_PRUNE_PASSES 2u
@@ -54,15 +58,19 @@ typedef struct MatterMaterialCluster {
     Vec2 center;
     float radius;
     float roughness;
+    float angle;
+    float aspect;
     uint32_t seed;
 } MatterMaterialCluster;
 
 typedef struct MatterPlanetDeposits {
+    MatterMaterialCluster mud_clusters[MATTER_PLANET_MUD_CLUSTER_COUNT];
     MatterMaterialCluster gel_clusters[MATTER_PLANET_GEL_CLUSTER_COUNT];
     MatterMaterialCluster iron_clusters[MATTER_PLANET_IRON_CLUSTER_COUNT];
 } MatterPlanetDeposits;
 
 typedef struct MatterMaterialCounts {
+    uint32_t mud;
     uint32_t gel;
     uint32_t iron;
 } MatterMaterialCounts;
@@ -80,6 +88,14 @@ static float Matter_LerpFloat(float a, float b, float t) {
 static bool Matter_NodeOverlapsRadius(const MatterNode* node, Vec2 center, float radius) {
     float reach = radius + node->radius;
     return Vec2_DistanceSq(node->pos, center) <= reach * reach;
+}
+
+static float Matter_CircleArea(float radius) {
+    return MATTER_PI * radius * radius;
+}
+
+static float Matter_RadiusForArea(float area) {
+    return sqrtf(area / MATTER_PI);
 }
 
 static Vec2 Matter_Lerp(Vec2 a, Vec2 b, float t) {
@@ -1197,8 +1213,6 @@ static uint32_t MatterWorld_CollectTerrainNearPlayerField(
 static void MatterWorld_SolveTerrainPlayerFieldCollisions(MatterWorld* world) {
     uint32_t player_mask = Matter_MaterialMask(MATERIAL_PLAYER);
 
-    MatterWorld_RebuildGrid(world);
-
     uint16_t terrain_nodes[MAX_MATTER_NODES];
     uint32_t terrain_count = MatterWorld_CollectTerrainNearPlayerField(
         world,
@@ -1289,6 +1303,7 @@ static void MatterWorld_SolveCircleCollisions(MatterWorld* world) {
         }
     }
 
+    MatterWorld_RebuildGrid(world);
     MatterWorld_SolvePlayerFieldCollisions(world);
     MatterWorld_SolveTerrainPlayerFieldCollisions(world);
 }
@@ -1445,6 +1460,20 @@ static void MatterWorld_UpdateNodeMass(MatterNode* node) {
     node->inv_mass = (node->mass > 0.0f) ? 1.0f / node->mass : 0.0f;
 }
 
+static void Matter_LimitNodeVelocity(MatterNode* node) {
+    const MaterialDef* def = Matter_GetMaterialDef(node->material);
+    float limit = def->velocity_limit;
+    if (limit <= 0.0f) {
+        return;
+    }
+
+    float speed_sq = Vec2_LengthSq(node->vel);
+    float limit_sq = limit * limit;
+    if (speed_sq > limit_sq) {
+        node->vel = Vec2_Scale(node->vel, limit / sqrtf(speed_sq));
+    }
+}
+
 // World construction API.
 void MatterWorld_Init(MatterWorld* world) {
     memset(world, 0, sizeof(*world));
@@ -1592,12 +1621,50 @@ static MatterMaterialCluster Matter_CreatePlanetCluster(
         .radius = planet_radius *
             Matter_LerpFloat(min_radius_scale, max_radius_scale, Matter_Random01(seed + 37u)),
         .roughness = roughness,
+        .angle = Matter_Random01(seed + 41u) * MATTER_TAU,
+        .aspect = 1.0f,
         .seed = seed
     };
 }
 
+static MatterMaterialCluster Matter_CreatePlanetVein(
+    float planet_radius,
+    uint32_t seed,
+    float min_distance_scale,
+    float max_distance_scale,
+    float min_radius_scale,
+    float max_radius_scale,
+    float min_aspect,
+    float max_aspect
+) {
+    MatterMaterialCluster vein = Matter_CreatePlanetCluster(
+        planet_radius,
+        seed,
+        min_distance_scale,
+        max_distance_scale,
+        min_radius_scale,
+        max_radius_scale,
+        0.52f
+    );
+
+    vein.aspect = Matter_LerpFloat(min_aspect, max_aspect, Matter_Random01(seed + 137u));
+    return vein;
+}
+
 static MatterPlanetDeposits Matter_CreatePlanetDeposits(float radius, uint32_t seed) {
     MatterPlanetDeposits deposits = {0};
+
+    for (uint32_t i = 0; i < MATTER_PLANET_MUD_CLUSTER_COUNT; i++) {
+        deposits.mud_clusters[i] = Matter_CreatePlanetCluster(
+            radius,
+            seed + 53u + i * 211u,
+            0.38f,
+            0.72f,
+            0.08f,
+            0.15f,
+            0.34f
+        );
+    }
 
     for (uint32_t i = 0; i < MATTER_PLANET_GEL_CLUSTER_COUNT; i++) {
         deposits.gel_clusters[i] = Matter_CreatePlanetCluster(
@@ -1611,47 +1678,18 @@ static MatterPlanetDeposits Matter_CreatePlanetDeposits(float radius, uint32_t s
         );
     }
 
-    float main_angle = Matter_Random01(seed + 409u) * MATTER_TAU;
-    float main_distance = radius * Matter_LerpFloat(0.16f, 0.38f, Matter_Random01(seed + 503u));
-    Vec2 main_center = {
-        cosf(main_angle) * main_distance,
-        sinf(main_angle) * main_distance
-    };
-
-    deposits.iron_clusters[0] = (MatterMaterialCluster){
-        .center = main_center,
-        .radius = radius * Matter_LerpFloat(0.09f, 0.15f, Matter_Random01(seed + 607u)),
-        .roughness = 0.28f,
-        .seed = seed + 701u
-    };
-
-    for (uint32_t i = 1; i < MATTER_PLANET_IRON_CLUSTER_COUNT; i++) {
+    for (uint32_t i = 0; i < MATTER_PLANET_IRON_CLUSTER_COUNT; i++) {
         uint32_t cluster_seed = seed + 809u + i * 193u;
-        if (i < 4u) {
-            float angle = Matter_Random01(cluster_seed + 13u) * MATTER_TAU;
-            float distance = radius *
-                Matter_LerpFloat(0.09f, 0.22f, Matter_Random01(cluster_seed + 29u));
-            deposits.iron_clusters[i] = (MatterMaterialCluster){
-                .center = {
-                    main_center.x + cosf(angle) * distance,
-                    main_center.y + sinf(angle) * distance
-                },
-                .radius = radius *
-                    Matter_LerpFloat(0.045f, 0.085f, Matter_Random01(cluster_seed + 43u)),
-                .roughness = 0.32f,
-                .seed = cluster_seed
-            };
-        } else {
-            deposits.iron_clusters[i] = Matter_CreatePlanetCluster(
-                radius,
-                cluster_seed,
-                0.14f,
-                0.58f,
-                0.04f,
-                0.075f,
-                0.34f
-            );
-        }
+        deposits.iron_clusters[i] = Matter_CreatePlanetVein(
+            radius,
+            cluster_seed,
+            0.10f,
+            0.70f,
+            0.018f,
+            0.040f,
+            2.0f,
+            4.2f
+        );
     }
 
     return deposits;
@@ -1668,12 +1706,19 @@ static float Matter_ClusterRadiusAtAngle(const MatterMaterialCluster* cluster, f
 
 static bool Matter_PointInCluster(Vec2 local, const MatterMaterialCluster* cluster) {
     Vec2 delta = Vec2_Sub(local, cluster->center);
-    float distance_sq = Vec2_LengthSq(delta);
+    float aspect = fmaxf(cluster->aspect, 1.0f);
+    float c = cosf(cluster->angle);
+    float s = sinf(cluster->angle);
+    Vec2 shaped = {
+        (delta.x * c + delta.y * s) / aspect,
+        -delta.x * s + delta.y * c
+    };
+    float distance_sq = Vec2_LengthSq(shaped);
     if (distance_sq <= 0.0001f) {
         return true;
     }
 
-    float angle = atan2f(delta.y, delta.x);
+    float angle = atan2f(shaped.y, shaped.x);
     float radius = Matter_ClusterRadiusAtAngle(cluster, angle);
     return distance_sq <= radius * radius;
 }
@@ -1691,7 +1736,13 @@ static MaterialId Matter_PlanetMaterial(Vec2 local, const MatterPlanetDeposits* 
         }
     }
 
-    return MATERIAL_MUD;
+    for (uint32_t i = 0; i < MATTER_PLANET_MUD_CLUSTER_COUNT; i++) {
+        if (Matter_PointInCluster(local, &deposits->mud_clusters[i])) {
+            return MATERIAL_MUD;
+        }
+    }
+
+    return MATERIAL_ROCK;
 }
 
 static void MatterWorld_SetClosestNodeMaterial(
@@ -1891,6 +1942,8 @@ static MatterMaterialCounts MatterWorld_AssignPlanetMaterials(
             counts.gel++;
         } else if (material == MATERIAL_IRON) {
             counts.iron++;
+        } else if (material == MATERIAL_MUD) {
+            counts.mud++;
         }
     }
 
@@ -1992,7 +2045,7 @@ void MatterWorld_GeneratePlanet(
     uint32_t max_attempts = node_count * MATTER_PLANET_PLACEMENT_ATTEMPTS_PER_NODE;
     uint32_t candidate_id = 0;
 
-    if (!MatterWorld_AddNode(world, center, Matter_PlanetNodeRadius(seed + 1201u), MATERIAL_MUD)) {
+    if (!MatterWorld_AddNode(world, center, Matter_PlanetNodeRadius(seed + 1201u), MATERIAL_ROCK)) {
         return;
     }
     MatterWorld_InsertNodeIntoGrid(world, start);
@@ -2025,7 +2078,7 @@ void MatterWorld_GeneratePlanet(
         }
 
         uint32_t node_id = world->node_count;
-        if (MatterWorld_AddNode(world, pos, node_radius, MATERIAL_MUD)) {
+        if (MatterWorld_AddNode(world, pos, node_radius, MATERIAL_ROCK)) {
             MatterWorld_InsertNodeIntoGrid(world, node_id);
         }
     }
@@ -2043,6 +2096,14 @@ void MatterWorld_GeneratePlanet(
             start,
             Vec2_Add(center, deposits.gel_clusters[0].center),
             MATERIAL_GEL
+        );
+    }
+    if (material_counts.mud == 0) {
+        MatterWorld_SetClosestNodeMaterial(
+            world,
+            start,
+            Vec2_Add(center, deposits.mud_clusters[0].center),
+            MATERIAL_MUD
         );
     }
     if (material_counts.iron == 0) {
@@ -2085,6 +2146,7 @@ void MatterWorld_ApplyForceToNode(MatterWorld* world, uint16_t node_id, Vec2 for
     }
 
     node->vel = Vec2_Add(node->vel, Vec2_Scale(force, node->inv_mass * dt));
+    Matter_LimitNodeVelocity(node);
 }
 
 void MatterWorld_ApplyForceBetweenNodes(
@@ -2123,15 +2185,17 @@ void MatterWorld_ApplyConstraintTargetForce(
     MatterWorld_ApplyForceBetweenNodes(world, node, anchor, force_on_node, dt);
 }
 
-uint32_t MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount) {
+MatterMiningResult MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount) {
+    MatterMiningResult result = {0};
+
     if (!world || radius <= 0.0f || amount <= 0.0f) {
-        return 0;
+        return result;
     }
 
     MatterWorld_RebuildGrid(world);
-    uint32_t affected_count = 0;
     bool affected_nodes[MAX_MATTER_NODES] = {0};
     bool topology_changed = false;
+    float min_area = Matter_CircleArea(MATTER_MIN_NODE_RADIUS);
     MatterGridArea area = Matter_GridAreaAround(center, radius + world->grid_max_radius);
 
     for (int32_t y = area.min_y; y <= area.max_y; y++) {
@@ -2158,26 +2222,36 @@ uint32_t MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float a
                 float distance = sqrtf(distance_sq);
                 float surface_distance = fmaxf(distance - node->radius, 0.0f);
                 float falloff = 1.0f - Matter_ClampFloat(surface_distance / radius, 0.0f, 1.0f);
-                node->radius -= amount * (0.25f + 0.75f * falloff * falloff);
+                const MaterialDef* def = Matter_GetMaterialDef(node->material);
+                float damage = amount *
+                    MATTER_MINING_AREA_DAMAGE_SCALE *
+                    def->mining_damage_scale *
+                    (0.25f + 0.75f * falloff * falloff);
+                float previous_area = Matter_CircleArea(node->radius);
+                float mined_area = previous_area - damage;
                 affected_nodes[node_id] = true;
 
-                if (node->radius <= 0.75f) {
+                if (mined_area <= min_area) {
+                    result.removed_area += previous_area;
                     node->radius = 0.0f;
                     node->vel = (Vec2){0.0f, 0.0f};
                     node->prev_pos = node->pos;
                     world->islands_dirty = true;
                     topology_changed = true;
                     topology_changed |= MatterWorld_DeactivateConstraintsForNode(world, (uint32_t)node_id);
+                } else {
+                    result.removed_area += previous_area - mined_area;
+                    node->radius = Matter_RadiusForArea(mined_area);
                 }
 
                 MatterWorld_UpdateNodeMass(node);
-                affected_count++;
+                result.affected_nodes++;
             }
         }
     }
 
-    if (affected_count == 0) {
-        return 0;
+    if (result.affected_nodes == 0) {
+        return result;
     }
 
     topology_changed |= MatterWorld_PruneConstraints(
@@ -2191,7 +2265,7 @@ uint32_t MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float a
     }
 
     MatterWorld_RebuildGPUCache(world);
-    return affected_count;
+    return result;
 }
 
 static void MatterWorld_IntegrateNodes(MatterWorld* world, float dt) {
@@ -2208,6 +2282,7 @@ static void MatterWorld_IntegrateNodes(MatterWorld* world, float dt) {
         float damping = Matter_ClampFloat(1.0f - def->damping * dt, 0.0f, 1.0f);
         node->prev_pos = node->pos;
         node->vel = Vec2_Scale(node->vel, damping);
+        Matter_LimitNodeVelocity(node);
         node->pos = Vec2_Add(node->pos, Vec2_Scale(node->vel, dt));
     }
 }
@@ -2245,6 +2320,7 @@ static void MatterWorld_UpdateVelocities(MatterWorld* world, float dt) {
         }
 
         node->vel = Vec2_Scale(Vec2_Sub(node->pos, node->prev_pos), inv_dt);
+        Matter_LimitNodeVelocity(node);
     }
 }
 

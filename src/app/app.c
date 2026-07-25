@@ -14,6 +14,10 @@
 // Internal Helpers
 // -----------------------------------------------------------------------------
 
+static float App_ElapsedMs(Uint64 start, Uint64 end) {
+    return (float)(((double)(end - start) * 1000.0) / (double)SDL_GetPerformanceFrequency());
+}
+
 static Vec2 App_FindPlanetSpawnPoint(const MatterWorld* world, Vec2 fallback) {
     Vec2 spawn = fallback;
     float best_surface_y = FLT_MAX;
@@ -91,12 +95,17 @@ static void App_HandleLifecycle(EngineContext* ctx) {
 }
 
 static void App_Render(EngineContext* ctx) {
-    if (!ctx->hasWindow || ctx->isBackground) return;
+    if (!ctx->hasWindow || ctx->isBackground) {
+        ctx->profile.render_ms = 0.0f;
+        return;
+    }
 
+    Uint64 start = SDL_GetPerformanceCounter();
     if (!Renderer_Render(ctx)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_RENDER, "Draw failed, triggering recovery.");
         ctx->hasWindow = false;
     }
+    ctx->profile.render_ms = App_ElapsedMs(start, SDL_GetPerformanceCounter());
 }
 
 static void App_UpdatePlayer(EngineContext* ctx) {
@@ -114,6 +123,9 @@ static void App_UpdatePlayer(EngineContext* ctx) {
 }
 
 static void App_UpdateMining(EngineContext* ctx) {
+    ctx->profile.mining_nodes = 0;
+    ctx->profile.mining_area = 0.0f;
+
     if (!ctx->input.mouseLeft) {
         return;
     }
@@ -123,7 +135,14 @@ static void App_UpdateMining(EngineContext* ctx) {
         return;
     }
 
-    MatterWorld_Mine(&ctx->matter, target, 12.0f, 18.0f * ctx->time.delta);
+    MatterMiningResult result = MatterWorld_Mine(
+        &ctx->matter,
+        target,
+        12.0f,
+        18.0f * ctx->time.delta
+    );
+    ctx->profile.mining_nodes = result.affected_nodes;
+    ctx->profile.mining_area = result.removed_area;
 }
 
 static void App_UpdateCamera(EngineContext* ctx) {
@@ -140,15 +159,29 @@ static void App_UpdateDebugInput(EngineContext* ctx) {
 }
 
 static void App_Update(EngineContext* ctx) {
-    App_UpdateDebugInput(ctx);
-    App_UpdateMining(ctx);
-    App_UpdatePlayer(ctx);
+    Uint64 update_start = SDL_GetPerformanceCounter();
 
+    App_UpdateDebugInput(ctx);
+
+    Uint64 mining_start = SDL_GetPerformanceCounter();
+    App_UpdateMining(ctx);
+    ctx->profile.mining_ms = App_ElapsedMs(mining_start, SDL_GetPerformanceCounter());
+
+    Uint64 player_start = SDL_GetPerformanceCounter();
+    App_UpdatePlayer(ctx);
+    ctx->profile.player_ms = App_ElapsedMs(player_start, SDL_GetPerformanceCounter());
+
+    Uint64 gravity_start = SDL_GetPerformanceCounter();
     MatterWorld_ApplyIslandGravityToMatter(&ctx->matter, ctx->time.delta);
     MatterWorld_ApplyIslandGravityToMaterial(&ctx->matter, MATERIAL_PLAYER, ctx->time.delta);
+    ctx->profile.gravity_ms = App_ElapsedMs(gravity_start, SDL_GetPerformanceCounter());
 
+    Uint64 matter_start = SDL_GetPerformanceCounter();
     MatterWorld_Update(&ctx->matter, ctx->time.delta);
+    ctx->profile.matter_ms = App_ElapsedMs(matter_start, SDL_GetPerformanceCounter());
+
     App_UpdateCamera(ctx);
+    ctx->profile.update_ms = App_ElapsedMs(update_start, SDL_GetPerformanceCounter());
     DebugOverlay_Update(ctx, ctx->time.delta);
 }
 

@@ -8,43 +8,64 @@
 
 static const MaterialDef MATERIAL_DEFS[MATERIAL_COUNT] = {
     [MATERIAL_MUD] = {
-        .density = 1.0f,
-        .stiffness = 0.32f,
-        .damping = 1.2f,
-        .contact_softness = 0.58f,
-        .plastic_yield = 0.18f,
-        .plastic_creep = 1.8f,
-        .break_strain = 1.30f,
-        .rotation_stiffness = 0.06f,
-        .structural_range_scale = 0.38f,
-        .bond_min_closing_speed = 42.0f,
-        .bond_stiffness = 0.24f
+        .density = 0.92f,
+        .stiffness = 0.62f,
+        .damping = 3.4f,
+        .contact_softness = 0.24f,
+        .plastic_yield = 0.04f,
+        .plastic_creep = 0.08f,
+        .break_strain = 0.34f,
+        .rotation_stiffness = 0.0f,
+        .structural_range_scale = 0.31f,
+        .bond_min_closing_speed = 135.0f,
+        .bond_stiffness = 0.24f,
+        .mining_damage_scale = 0.62f,
+        .velocity_limit = 150.0f
+    },
+    [MATERIAL_ROCK] = {
+        .density = 1.65f,
+        .stiffness = 0.92f,
+        .damping = 2.2f,
+        .contact_softness = 0.08f,
+        .plastic_yield = 0.04f,
+        .plastic_creep = 0.0f,
+        .break_strain = 0.38f,
+        .rotation_stiffness = 0.72f,
+        .structural_range_scale = 0.54f,
+        .bond_min_closing_speed = 190.0f,
+        .bond_stiffness = 0.84f,
+        .mining_damage_scale = 0.16f,
+        .velocity_limit = 180.0f
     },
     [MATERIAL_GEL] = {
-        .density = 0.75f,
-        .stiffness = 0.22f,
-        .damping = 1.8f,
-        .contact_softness = 0.72f,
-        .plastic_yield = 0.90f,
+        .density = 0.58f,
+        .stiffness = 0.08f,
+        .damping = 6.0f,
+        .contact_softness = 0.94f,
+        .plastic_yield = 3.0f,
         .plastic_creep = 0.0f,
-        .break_strain = 2.20f,
-        .rotation_stiffness = 0.03f,
-        .structural_range_scale = 0.36f,
-        .bond_min_closing_speed = 62.0f,
-        .bond_stiffness = 0.16f
+        .break_strain = 4.2f,
+        .rotation_stiffness = 0.0f,
+        .structural_range_scale = 0.46f,
+        .bond_min_closing_speed = 28.0f,
+        .bond_stiffness = 0.06f,
+        .mining_damage_scale = 0.16f,
+        .velocity_limit = 120.0f
     },
     [MATERIAL_IRON] = {
-        .density = 2.7f,
-        .stiffness = 0.94f,
-        .damping = 0.65f,
-        .contact_softness = 0.08f,
-        .plastic_yield = 0.16f,
-        .plastic_creep = 0.18f,
-        .break_strain = 0.55f,
-        .rotation_stiffness = 0.82f,
-        .structural_range_scale = 0.58f,
-        .bond_min_closing_speed = 160.0f,
-        .bond_stiffness = 0.90f
+        .density = 3.45f,
+        .stiffness = 1.0f,
+        .damping = 1.6f,
+        .contact_softness = 0.03f,
+        .plastic_yield = 0.08f,
+        .plastic_creep = 0.02f,
+        .break_strain = 0.82f,
+        .rotation_stiffness = 0.99f,
+        .structural_range_scale = 0.62f,
+        .bond_min_closing_speed = 240.0f,
+        .bond_stiffness = 0.98f,
+        .mining_damage_scale = 0.055f,
+        .velocity_limit = 200.0f
     },
     [MATERIAL_PLAYER] = {
         .density = 0.85f,
@@ -57,7 +78,9 @@ static const MaterialDef MATERIAL_DEFS[MATERIAL_COUNT] = {
         .rotation_stiffness = 0.0f,
         .structural_range_scale = 0.0f,
         .bond_min_closing_speed = 0.0f,
-        .bond_stiffness = 0.0f
+        .bond_stiffness = 0.0f,
+        .mining_damage_scale = 0.0f,
+        .velocity_limit = 180.0f
     }
 };
 
@@ -97,6 +120,7 @@ uint32_t Matter_MaterialMask(MaterialId material) {
 
 uint32_t Matter_TerrainMaterialMask(void) {
     return Matter_MaterialMask(MATERIAL_MUD) |
+        Matter_MaterialMask(MATERIAL_ROCK) |
         Matter_MaterialMask(MATERIAL_GEL) |
         Matter_MaterialMask(MATERIAL_IRON);
 }
@@ -189,6 +213,10 @@ float Matter_PairBreakStrain(const MatterNode* a, const MatterNode* b) {
 float Matter_PairBondMinClosingSpeed(const MatterNode* a, const MatterNode* b) {
     const MaterialDef* material_a = Matter_GetMaterialDef(a->material);
     const MaterialDef* material_b = Matter_GetMaterialDef(b->material);
+    if (a->material == MATERIAL_GEL || b->material == MATERIAL_GEL) {
+        return fminf(material_a->bond_min_closing_speed, material_b->bond_min_closing_speed);
+    }
+
     return fmaxf(material_a->bond_min_closing_speed, material_b->bond_min_closing_speed);
 }
 
