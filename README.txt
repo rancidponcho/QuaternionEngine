@@ -17,10 +17,18 @@ DIRECTORY LAYOUT
 ================================================================================
 
 /src
-    /core       - Lifecycle, Input, Hardware Abstraction (HAL)
-    /render     - Shader pipeline, Compute Dispatch, Resolution Scaling
+    /app        - Game loop and high-level orchestration
+    /assets     - Runtime asset loading
+    /core       - Lifecycle, input, and hardware abstraction
+    /debug      - Debug overlays and diagnostics
+    /game       - Gameplay simulation, matter, player, and tools
+    /math       - Shared math helpers
+    /render     - Shader pipeline, compute dispatch, and resolution scaling
+        /shaders - HLSL compute shader sources
+    /ui         - Text, panels, and UI layout
 /assets
-    /shaders    - HLSL source (.hlsl) and compiled bytecode (.spv)
+    /fonts      - Bitmap font assets
+/docs           - Design notes and architecture sketches
 /external       - SDL3 (fetched automatically via CMake)
 /ios            - iOS-specific resources (Storyboards, Info.plist)
 /android        - Gradle build system and Manifests
@@ -102,6 +110,8 @@ NOTES
   compatibility.
 
 * SHADERS: Engine uses a unified HLSL shader path.
+  - Source files live in src/render/shaders.
+  - Desktop builds deploy compiled bytecode to build/assets/shaders.
   - PC/Android: Compiled to SPIR-V.
   - Apple: Transpiled SPIR-V -> MSL -> Metallib via SPIRV-Cross.
 

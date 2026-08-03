@@ -2,10 +2,10 @@
 
 #include "debug/debug_overlay.h"
 #include "game/matter.h"
+#include "game/mining_tool.h"
 #include "game/player.h"
 #include "render/renderer.h"
 #include <SDL3/SDL.h>
-#include <float.h>
 
 #define PLAYER_SURFACE_SPAWN_CLEARANCE 26.0f
 #define PHYSICS_DEBUG_FLAGS RENDERER_PHYSICS_DEBUG_ALL
@@ -18,30 +18,16 @@ static float App_ElapsedMs(Uint64 start, Uint64 end) {
     return (float)(((double)(end - start) * 1000.0) / (double)SDL_GetPerformanceFrequency());
 }
 
-static Vec2 App_FindPlanetSpawnPoint(const MatterWorld* world, Vec2 fallback) {
-    Vec2 spawn = fallback;
-    float best_surface_y = FLT_MAX;
-
-    for (uint32_t i = 0; i < world->node_count; i++) {
-        const MatterNode* node = &world->nodes[i];
-        if (node->radius <= 0.0f || node->material == MATERIAL_PLAYER) {
-            continue;
-        }
-
-        float surface_y = node->pos.y - node->radius;
-        if (surface_y < best_surface_y) {
-            best_surface_y = surface_y;
-            spawn = (Vec2){node->pos.x, surface_y - PLAYER_SURFACE_SPAWN_CLEARANCE};
-        }
-    }
-
-    return spawn;
+static void App_HideMiningTool(EngineContext* ctx) {
+    Player_ResetTool(&ctx->player);
+    Renderer_ClearMiningOverlay(ctx);
 }
 
 static void App_SpawnInitialMatter(EngineContext* ctx) {
+    Vec2 view_size = Renderer_GetInternalSize(ctx);
     Vec2 planet_center = {
-        (float)ctx->renderer.internalW * 0.5f,
-        (float)ctx->renderer.internalH * 0.56f
+        view_size.x * 0.5f,
+        view_size.y * 0.56f
     };
 
     const float planet_radius = 185.0f;
@@ -56,9 +42,10 @@ static void App_SpawnInitialMatter(EngineContext* ctx) {
         seed
     );
 
-    Vec2 player_center = App_FindPlanetSpawnPoint(
+    Vec2 player_center = MatterWorld_FindSurfaceSpawnPoint(
         &ctx->matter,
-        (Vec2){planet_center.x, planet_center.y - planet_radius * 0.84f}
+        (Vec2){planet_center.x, planet_center.y - planet_radius * 0.84f},
+        PLAYER_SURFACE_SPAWN_CLEARANCE
     );
 
     if (Player_Spawn(&ctx->player, &ctx->matter, player_center)) {
@@ -122,27 +109,42 @@ static void App_UpdatePlayer(EngineContext* ctx) {
     );
 }
 
-static void App_UpdateMining(EngineContext* ctx) {
+static void App_UpdateToolAndMining(EngineContext* ctx) {
     ctx->profile.mining_nodes = 0;
     ctx->profile.mining_area = 0.0f;
-
-    if (!ctx->input.mouseLeft) {
-        return;
-    }
+    ctx->profile.mining_hit = false;
+    ctx->profile.mining_material = MATERIAL_COUNT;
 
     Vec2 target;
     if (!Renderer_WindowToWorldPoint(ctx, ctx->input.mousePos, &target)) {
+        App_HideMiningTool(ctx);
         return;
     }
 
-    MatterMiningResult result = MatterWorld_Mine(
+    bool firing = ctx->input.mouseLeft;
+    if (!Player_UpdateTool(&ctx->player, &ctx->matter, target, firing, ctx->time.delta)) {
+        App_HideMiningTool(ctx);
+        return;
+    }
+
+    const PlayerTool* tool = Player_GetTool(&ctx->player);
+    Vec2 tool_direction = Player_ToolDirection(tool);
+    Renderer_SetMiningTool(ctx, tool->rear, tool->muzzle, true, firing);
+    MiningToolFrame mining = MiningTool_Update(
         &ctx->matter,
-        target,
-        12.0f,
-        18.0f * ctx->time.delta
+        Player_GetCanister(&ctx->player),
+        tool->muzzle,
+        tool_direction,
+        tool->active,
+        firing,
+        ctx->time.delta
     );
-    ctx->profile.mining_nodes = result.affected_nodes;
-    ctx->profile.mining_area = result.removed_area;
+
+    ctx->profile.mining_nodes = mining.affected_nodes;
+    ctx->profile.mining_area = mining.removed_area;
+    ctx->profile.mining_hit = mining.hit;
+    ctx->profile.mining_material = mining.hit_material;
+    Renderer_SetMiningBeam(ctx, mining.beam_start, mining.beam_end, mining.beam_active, mining.hit);
 }
 
 static void App_UpdateCamera(EngineContext* ctx) {
@@ -154,7 +156,7 @@ static void App_UpdateCamera(EngineContext* ctx) {
 
 static void App_UpdateDebugInput(EngineContext* ctx) {
     if (Input_GetKeyDown(ctx, SDL_SCANCODE_F3)) {
-        ctx->renderer.physicsDebugFlags ^= PHYSICS_DEBUG_FLAGS;
+        Renderer_TogglePhysicsDebug(ctx, PHYSICS_DEBUG_FLAGS);
     }
 }
 
@@ -164,7 +166,7 @@ static void App_Update(EngineContext* ctx) {
     App_UpdateDebugInput(ctx);
 
     Uint64 mining_start = SDL_GetPerformanceCounter();
-    App_UpdateMining(ctx);
+    App_UpdateToolAndMining(ctx);
     ctx->profile.mining_ms = App_ElapsedMs(mining_start, SDL_GetPerformanceCounter());
 
     Uint64 player_start = SDL_GetPerformanceCounter();

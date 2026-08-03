@@ -3,6 +3,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "math/scalar.h"
+
 #define PLAYER_TAIL_NODE 0
 #define PLAYER_BODY_NODE 1
 #define PLAYER_HEAD_NODE 2
@@ -12,11 +14,32 @@
 #define PLAYER_MOVE_FORCE 7600.0f
 #define PLAYER_HEAD_OFFSET 7.8f
 #define PLAYER_HEAD_ALIGN_STRENGTH 1400.0f
+#define PLAYER_HEAD_GRAVITY_MIN_ACCEL 8.0f
+#define PLAYER_HEAD_GRAVITY_FULL_ACCEL 54.0f
+#define PLAYER_HEAD_GRAVITY_MAX_BLEND 0.62f
+#define PLAYER_TOOL_LENGTH 14.5f
+#define PLAYER_TOOL_BODY_STIFFNESS 150.0f
+#define PLAYER_TOOL_BODY_DAMPING 22.0f
+#define PLAYER_TOOL_BODY_MAX_SPEED 130.0f
+#define PLAYER_TOOL_IDLE_STIFFNESS 72.0f
+#define PLAYER_TOOL_IDLE_DAMPING 15.0f
+#define PLAYER_TOOL_FIRING_STIFFNESS 16.0f
+#define PLAYER_TOOL_FIRING_DAMPING 7.0f
+#define PLAYER_TOOL_IDLE_MAX_SPEED 18.0f
+#define PLAYER_TOOL_FIRING_MAX_SPEED 4.5f
+#define PLAYER_PI 3.14159265358979323846f
+#define PLAYER_TAU (PLAYER_PI * 2.0f)
 
 typedef struct PlayerGripCandidates {
     uint16_t nodes[MAX_MATTER_NODES];
     uint32_t count;
 } PlayerGripCandidates;
+
+typedef struct PlayerSpringTuning {
+    float stiffness;
+    float damping;
+    float max_speed;
+} PlayerSpringTuning;
 
 static bool Player_NodeActive(const MatterWorld* world, uint16_t node_id) {
     return world &&
@@ -28,6 +51,50 @@ static Vec2 Player_BodyPosition(const Player* player, const MatterWorld* world) 
     Vec2 pos = {0.0f, 0.0f};
     Player_GetPosition(player, world, &pos);
     return pos;
+}
+
+static float Player_WrapAngle(float angle) {
+    while (angle > PLAYER_PI) {
+        angle -= PLAYER_TAU;
+    }
+    while (angle < -PLAYER_PI) {
+        angle += PLAYER_TAU;
+    }
+    return angle;
+}
+
+static Vec2 Player_BlendDirections(Vec2 a, Vec2 b, float t) {
+    Vec2 blended = Vec2_Add(
+        Vec2_Scale(a, 1.0f - t),
+        Vec2_Scale(b, t)
+    );
+    return Vec2_NormalizeOr(blended, (t > 0.5f) ? b : a);
+}
+
+static void Player_UpdateAttachment(
+    PlayerAttachment* attachment,
+    Vec2 target_pos,
+    Vec2 target_vel,
+    PlayerSpringTuning tuning,
+    float dt
+) {
+    if (!attachment->initialized || dt <= 0.0f) {
+        attachment->pos = target_pos;
+        attachment->vel = target_vel;
+        attachment->initialized = true;
+        return;
+    }
+
+    Vec2 offset = Vec2_Sub(target_pos, attachment->pos);
+    Vec2 relative_vel = Vec2_Sub(target_vel, attachment->vel);
+    Vec2 force = Vec2_Add(
+        Vec2_Scale(offset, tuning.stiffness),
+        Vec2_Scale(relative_vel, tuning.damping)
+    );
+
+    attachment->vel = Vec2_Add(attachment->vel, Vec2_Scale(force, dt));
+    attachment->vel = Vec2_Limit(attachment->vel, tuning.max_speed);
+    attachment->pos = Vec2_Add(attachment->pos, Vec2_Scale(attachment->vel, dt));
 }
 
 static bool Player_LegUsesNode(const Player* player, uint16_t node_id, uint32_t skip_leg) {
@@ -109,7 +176,7 @@ static uint16_t Player_FindGripNode(
 }
 
 static bool Player_AddBody(Player* player, MatterWorld* world, Vec2 center) {
-    if (!player || !world || world->node_count + PLAYER_BODY_NODE_COUNT > MAX_MATTER_NODES) {
+    if (!player || !world || !MatterWorld_CanAddNodes(world, PLAYER_BODY_NODE_COUNT)) {
         return false;
     }
 
@@ -254,6 +321,29 @@ bool Player_GetPosition(const Player* player, const MatterWorld* world, Vec2* ou
     return true;
 }
 
+const PlayerTool* Player_GetTool(const Player* player) {
+    return player ? &player->tool : NULL;
+}
+
+MaterialCanister* Player_GetCanister(Player* player) {
+    return player ? &player->canister : NULL;
+}
+
+const MaterialCanister* Player_GetCanisterConst(const Player* player) {
+    return player ? &player->canister : NULL;
+}
+
+void Player_ResetTool(Player* player) {
+    if (!player) {
+        return;
+    }
+
+    player->tool.active = false;
+    player->tool.firing = false;
+    player->tool.center.initialized = false;
+    player->tool.aim_initialized = false;
+}
+
 static bool Player_UpdateFacing(Player* player, const MatterWorld* world, bool move_active, Vec2 move_target) {
     if (!move_active) {
         return false;
@@ -270,10 +360,133 @@ static bool Player_UpdateFacing(Player* player, const MatterWorld* world, bool m
     return true;
 }
 
+Vec2 Player_ToolDirection(const PlayerTool* tool) {
+    if (!tool || !tool->aim_initialized) {
+        return (Vec2){1.0f, 0.0f};
+    }
+
+    return (Vec2){cosf(tool->angle), sinf(tool->angle)};
+}
+
+static PlayerSpringTuning Player_ToolBodyTuning(void) {
+    return (PlayerSpringTuning){
+        .stiffness = PLAYER_TOOL_BODY_STIFFNESS,
+        .damping = PLAYER_TOOL_BODY_DAMPING,
+        .max_speed = PLAYER_TOOL_BODY_MAX_SPEED
+    };
+}
+
+static PlayerSpringTuning Player_ToolAimTuning(bool firing) {
+    if (firing) {
+        return (PlayerSpringTuning){
+            .stiffness = PLAYER_TOOL_FIRING_STIFFNESS,
+            .damping = PLAYER_TOOL_FIRING_DAMPING,
+            .max_speed = PLAYER_TOOL_FIRING_MAX_SPEED
+        };
+    }
+
+    return (PlayerSpringTuning){
+        .stiffness = PLAYER_TOOL_IDLE_STIFFNESS,
+        .damping = PLAYER_TOOL_IDLE_DAMPING,
+        .max_speed = PLAYER_TOOL_IDLE_MAX_SPEED
+    };
+}
+
+static void Player_UpdateToolAnchor(PlayerTool* tool, const MatterNode* body, float dt) {
+    Player_UpdateAttachment(
+        &tool->center,
+        body->pos,
+        body->vel,
+        Player_ToolBodyTuning(),
+        dt
+    );
+}
+
+static void Player_UpdateToolAim(
+    PlayerTool* tool,
+    Vec2 facing,
+    Vec2 target,
+    bool firing,
+    float dt
+) {
+    Vec2 target_delta = Vec2_Sub(target, tool->center.pos);
+    if (Vec2_LengthSq(target_delta) <= 1.0f) {
+        target_delta = tool->aim_initialized ? Player_ToolDirection(tool) : facing;
+    }
+    tool->target_angle = atan2f(target_delta.y, target_delta.x);
+
+    if (!tool->aim_initialized || dt <= 0.0f) {
+        tool->angle = tool->target_angle;
+        tool->angular_velocity = 0.0f;
+        tool->aim_initialized = true;
+    } else {
+        PlayerSpringTuning tuning = Player_ToolAimTuning(firing);
+        float error = Player_WrapAngle(tool->target_angle - tool->angle);
+
+        tool->angular_velocity +=
+            (error * tuning.stiffness - tool->angular_velocity * tuning.damping) * dt;
+        tool->angular_velocity = Float_ClampAbs(tool->angular_velocity, tuning.max_speed);
+        tool->angle = Player_WrapAngle(tool->angle + tool->angular_velocity * dt);
+    }
+}
+
+static void Player_UpdateToolEndpoints(PlayerTool* tool) {
+    Vec2 direction = Player_ToolDirection(tool);
+    Vec2 half_tool = Vec2_Scale(direction, PLAYER_TOOL_LENGTH * 0.5f);
+    tool->rear = Vec2_Sub(tool->center.pos, half_tool);
+    tool->muzzle = Vec2_Add(tool->center.pos, half_tool);
+}
+
+bool Player_UpdateTool(Player* player, const MatterWorld* world, Vec2 target, bool firing, float dt) {
+    if (!player || !player->active || !world) {
+        return false;
+    }
+
+    uint16_t body_node = player->body_nodes[PLAYER_BODY_NODE];
+    if (!Player_NodeActive(world, body_node)) {
+        player->tool.active = false;
+        return false;
+    }
+
+    PlayerTool* tool = &player->tool;
+    const MatterNode* body = &world->nodes[body_node];
+    Player_UpdateToolAnchor(tool, body, dt);
+    Player_UpdateToolAim(tool, player->facing, target, firing, dt);
+    Player_UpdateToolEndpoints(tool);
+
+    tool->active = true;
+    tool->firing = firing;
+    return true;
+}
+
+static Vec2 Player_HeadTargetDirection(const Player* player, const MatterWorld* world, uint16_t body_node) {
+    Vec2 gravity;
+    if (!MatterWorld_GetGravityAtNode(world, body_node, &gravity)) {
+        return player->facing;
+    }
+
+    float gravity_length_sq = Vec2_LengthSq(gravity);
+    if (gravity_length_sq <= 0.0001f) {
+        return player->facing;
+    }
+
+    float gravity_strength = sqrtf(gravity_length_sq);
+    float gravity_blend = Float_Clamp(
+        (gravity_strength - PLAYER_HEAD_GRAVITY_MIN_ACCEL) /
+            (PLAYER_HEAD_GRAVITY_FULL_ACCEL - PLAYER_HEAD_GRAVITY_MIN_ACCEL),
+        0.0f,
+        1.0f
+    ) * PLAYER_HEAD_GRAVITY_MAX_BLEND;
+    Vec2 gravity_up = Vec2_Scale(gravity, -1.0f / gravity_strength);
+
+    return Player_BlendDirections(player->facing, gravity_up, gravity_blend);
+}
+
 static void Player_ApplyHeadConstraintForce(Player* player, MatterWorld* world, float dt) {
     uint16_t body_node = player->body_nodes[PLAYER_BODY_NODE];
     uint16_t head_node = player->body_nodes[PLAYER_HEAD_NODE];
-    Vec2 head_offset = Vec2_Scale(player->facing, PLAYER_HEAD_OFFSET);
+    Vec2 head_direction = Player_HeadTargetDirection(player, world, body_node);
+    Vec2 head_offset = Vec2_Scale(head_direction, PLAYER_HEAD_OFFSET);
 
     MatterWorld_ApplyConstraintTargetForce(
         world,

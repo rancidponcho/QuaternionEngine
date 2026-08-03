@@ -5,6 +5,10 @@
 #include <stdio.h>
 
 #include "core/engine.h"
+#include "game/material_canister.h"
+#include "game/matter.h"
+#include "game/player.h"
+#include "render/renderer.h"
 #include "ui/ui.h"
 
 #define DEBUG_OVERLAY_UPDATE_INTERVAL 0.25f
@@ -21,10 +25,15 @@ static const char* DEBUG_OVERLAY_PLACEHOLDER =
     "Mine --\n"
     "MineN --\n"
     "MineA --\n"
+    "Hit --\n"
     "Player --\n"
     "Grav --\n"
     "Matter --\n"
-    "Render --";
+    "Render --\n"
+    "Can -- L --\n"
+    "Top --\n"
+    "Mat M-- R--\n"
+    "Mat G-- I--";
 
 static const char* DEBUG_OVERLAY_FORMAT =
     "FPS %.1f\n"
@@ -38,10 +47,15 @@ static const char* DEBUG_OVERLAY_FORMAT =
     "Mine %.2f\n"
     "MineN %.1f\n"
     "MineA %.1f\n"
+    "Hit %s\n"
     "Player %.2f\n"
     "Grav %.2f\n"
     "Matter %.2f\n"
-    "Render %.2f";
+    "Render %.2f\n"
+    "Can %.0f L %u\n"
+    "Top %s %.0f\n"
+    "Mat M%.0f R%.0f\n"
+    "Mat G%.0f I%.0f";
 
 typedef struct DebugOverlayState {
     uint32_t panel_id;
@@ -91,7 +105,7 @@ void DebugOverlay_Init(EngineContext* ctx) {
         return;
     }
 
-    g_debug_overlay.panel_id = UI_CreatePanel(&ctx->ui, 4, 4, 128);
+    g_debug_overlay.panel_id = UI_CreatePanel(&ctx->ui, 4, 4, 144);
     if (g_debug_overlay.panel_id == UI_INVALID_ID) {
         return;
     }
@@ -150,26 +164,41 @@ void DebugOverlay_Update(EngineContext* ctx, float dt) {
         1.0f / (float)g_debug_overlay.sample_frames :
         0.0f;
 
-    char text[320];
+    const MaterialCanister* canister = Player_GetCanisterConst(&ctx->player);
+    const MaterialCanisterLayer* top = MaterialCanister_Top(canister);
+    const char* top_name = top ? Matter_MaterialName(top->material) : "--";
+    float top_amount = top ? top->amount : 0.0f;
+    MatterWorldStats matter_stats = MatterWorld_GetStats(&ctx->matter);
+
+    char text[512];
     snprintf(
         text,
         sizeof(text),
         DEBUG_OVERLAY_FORMAT,
         fps,
         ms,
-        ctx->matter.gpu_node_count,
-        ctx->renderer.visibleMatterNodeCount,
-        ctx->matter.constraint_count,
-        ctx->matter.bend_constraint_count,
-        ctx->matter.island_count,
+        matter_stats.active_node_count,
+        Renderer_GetVisibleMatterNodeCount(ctx),
+        matter_stats.constraint_count,
+        matter_stats.bend_constraint_count,
+        matter_stats.island_count,
         g_debug_overlay.update_ms_sum * inv_frames,
         g_debug_overlay.mining_ms_sum * inv_frames,
         g_debug_overlay.mining_nodes_sum * inv_frames,
         g_debug_overlay.mining_area_sum * inv_frames,
+        ctx->profile.mining_hit ? Matter_MaterialName(ctx->profile.mining_material) : "--",
         g_debug_overlay.player_ms_sum * inv_frames,
         g_debug_overlay.gravity_ms_sum * inv_frames,
         g_debug_overlay.matter_ms_sum * inv_frames,
-        g_debug_overlay.render_ms_sum * inv_frames
+        g_debug_overlay.render_ms_sum * inv_frames,
+        MaterialCanister_TotalAmount(canister),
+        MaterialCanister_LayerCount(canister),
+        top_name,
+        top_amount,
+        MaterialCanister_MaterialAmount(canister, MATERIAL_MUD),
+        MaterialCanister_MaterialAmount(canister, MATERIAL_ROCK),
+        MaterialCanister_MaterialAmount(canister, MATERIAL_GEL),
+        MaterialCanister_MaterialAmount(canister, MATERIAL_IRON)
     );
     UI_SetPanelText(ctx, g_debug_overlay.panel_id, text);
 

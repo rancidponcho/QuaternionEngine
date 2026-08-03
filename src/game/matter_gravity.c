@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "game/matter_internal.h"
+#include "math/scalar.h"
 
 #define MATTER_GRAVITY_SURFACE_ACCEL 54.0f
 #define MATTER_GRAVITY_MAX_ACCEL 62.0f
@@ -13,28 +14,17 @@
 #define MATTER_GRAVITY_EFFECTIVE_MIN_RADIUS MATTER_GRAVITY_SOURCE_FULL_RADIUS
 #define MATTER_GRAVITY_MIN_SOURCE_RATIO 0.85f
 
-static float MatterGravity_ClampFloat(float value, float min_value, float max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
-
-static float MatterGravity_SmoothStepFloat(float edge0, float edge1, float value) {
-    float t = MatterGravity_ClampFloat((value - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
 static float MatterGravity_SourceScale(const MatterIsland* island) {
     if (!island || !island->active) {
         return 0.0f;
     }
 
-    float mass_scale = MatterGravity_SmoothStepFloat(
+    float mass_scale = Float_SmoothStep(
         MATTER_GRAVITY_SOURCE_MIN_MASS,
         MATTER_GRAVITY_SOURCE_FULL_MASS,
         island->mass
     );
-    float radius_scale = MatterGravity_SmoothStepFloat(
+    float radius_scale = Float_SmoothStep(
         MATTER_GRAVITY_SOURCE_MIN_RADIUS,
         MATTER_GRAVITY_SOURCE_FULL_RADIUS,
         island->radius
@@ -65,10 +55,46 @@ static bool MatterGravity_ComputeIslandAccel(
     float surface_accel = MATTER_GRAVITY_SURFACE_ACCEL * source_scale;
     float accel = surface_accel * effective_radius * effective_radius /
         (falloff_distance * falloff_distance);
-    accel = MatterGravity_ClampFloat(accel, 0.0f, MATTER_GRAVITY_MAX_ACCEL);
+    accel = Float_Clamp(accel, 0.0f, MATTER_GRAVITY_MAX_ACCEL);
 
     *out_accel = Vec2_Scale(delta, accel / distance);
     return true;
+}
+
+bool MatterWorld_GetGravityAtNode(const MatterWorld* world, uint16_t node_id, Vec2* out_accel) {
+    if (out_accel) {
+        *out_accel = (Vec2){0.0f, 0.0f};
+    }
+
+    if (!world || !out_accel || node_id >= world->node_count) {
+        return false;
+    }
+
+    const MatterNode* node = &world->nodes[node_id];
+    if (node->radius <= 0.0f || node->mass <= 0.0f) {
+        return false;
+    }
+
+    uint32_t target_mask = Matter_MaterialMask(node->material);
+    uint16_t own_island = world->node_island[node_id];
+    Vec2 total = {0.0f, 0.0f};
+
+    for (uint32_t source_id = 0; source_id < world->island_count; source_id++) {
+        const MatterIsland* source = &world->islands[source_id];
+        if ((source->material_mask & target_mask) != 0u ||
+            own_island == source_id)
+        {
+            continue;
+        }
+
+        Vec2 accel;
+        if (MatterGravity_ComputeIslandAccel(source, node->pos, &accel)) {
+            total = Vec2_Add(total, accel);
+        }
+    }
+
+    *out_accel = total;
+    return Vec2_LengthSq(total) > 0.0001f;
 }
 
 void MatterWorld_ApplyIslandGravityToMaterial(MatterWorld* world, MaterialId material, float dt) {
@@ -76,29 +102,14 @@ void MatterWorld_ApplyIslandGravityToMaterial(MatterWorld* world, MaterialId mat
         return;
     }
 
-    uint32_t target_mask = Matter_MaterialMask(material);
-
     for (uint16_t node_id = 0; node_id < world->node_count; node_id++) {
         MatterNode* node = &world->nodes[node_id];
         if (node->radius <= 0.0f || node->mass <= 0.0f || node->material != material) {
             continue;
         }
 
-        uint16_t own_island = world->node_island[node_id];
-
-        for (uint32_t source_id = 0; source_id < world->island_count; source_id++) {
-            const MatterIsland* source = &world->islands[source_id];
-            if ((source->material_mask & target_mask) != 0u ||
-                own_island == source_id)
-            {
-                continue;
-            }
-
-            Vec2 accel;
-            if (!MatterGravity_ComputeIslandAccel(source, node->pos, &accel)) {
-                continue;
-            }
-
+        Vec2 accel;
+        if (MatterWorld_GetGravityAtNode(world, node_id, &accel)) {
             Vec2 force = Vec2_Scale(accel, node->mass);
             MatterWorld_ApplyForceToNode(world, node_id, force, dt);
         }

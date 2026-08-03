@@ -376,6 +376,7 @@ bool UI_SetPanelText(EngineContext* ctx, uint32_t panel_id, const char* text) {
     }
 
     if (!UI_RebuildPanelTextLines(ui, panel, safe_text)) {
+        UI_RebuildPanelTextLines(ui, panel, panel->text);
         return false;
     }
 
@@ -420,6 +421,7 @@ bool UI_SetPanelStyle(EngineContext* ctx, uint32_t panel_id, const UIStyle* styl
 
     if (!UI_RebuildPanelTextLines(ui, panel, panel->text)) {
         panel->style = old_style;
+        UI_RebuildPanelTextLines(ui, panel, panel->text);
         return false;
     }
 
@@ -439,6 +441,7 @@ bool UI_SetPanelWidth(EngineContext* ctx, uint32_t panel_id, uint16_t width) {
 
     if (!UI_RebuildPanelTextLines(ui, panel, panel->text)) {
         panel->width = old_width;
+        UI_RebuildPanelTextLines(ui, panel, panel->text);
         return false;
     }
 

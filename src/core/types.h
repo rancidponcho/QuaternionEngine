@@ -19,6 +19,18 @@ typedef struct ShaderUniforms {
     uint32_t physicsDebugFlags;
     float   physicsDebugCircleWidth;
     float   physicsDebugFieldWidth;
+    Vec2    miningBeamStart;
+    Vec2    miningBeamEnd;
+    uint32_t miningBeamActive;
+    uint32_t miningBeamHit;
+    float   miningBeamWidth;
+    float   miningTipRadius;
+    Vec2    miningToolStart;
+    Vec2    miningToolEnd;
+    uint32_t miningToolActive;
+    uint32_t miningToolFiring;
+    float   miningToolWidth;
+    float   miningToolTipRadius;
 } ShaderUniforms;
 
 #endif // CORE_TYPES_H

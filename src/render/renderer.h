@@ -41,6 +41,14 @@ typedef struct Renderer {
     Uint32 dispatchY;      // Derived from internalH
     Uint32 visibleMatterNodeCount;
     Uint32 physicsDebugFlags;
+    Vec2 miningBeamStart;
+    Vec2 miningBeamEnd;
+    bool miningBeamActive;
+    bool miningBeamHit;
+    Vec2 miningToolStart;
+    Vec2 miningToolEnd;
+    bool miningToolActive;
+    bool miningToolFiring;
 
     SDL_Rect viewport;     // Letterbox destination rect
 } Renderer;
@@ -59,6 +67,12 @@ void Renderer_Shutdown(EngineContext *ctx);
 void Renderer_Resize(EngineContext* ctx, int width, int height);
 void Renderer_SetCameraCenter(EngineContext* ctx, Vec2 center);
 void Renderer_UpdateCamera(EngineContext* ctx, Vec2 target_center, float dt);
+Vec2 Renderer_GetInternalSize(const EngineContext* ctx);
+void Renderer_TogglePhysicsDebug(EngineContext* ctx, Uint32 flags);
+Uint32 Renderer_GetVisibleMatterNodeCount(const EngineContext* ctx);
+void Renderer_SetMiningTool(EngineContext* ctx, Vec2 start, Vec2 end, bool active, bool firing);
+void Renderer_SetMiningBeam(EngineContext* ctx, Vec2 start, Vec2 end, bool active, bool hit);
+void Renderer_ClearMiningOverlay(EngineContext* ctx);
 bool Renderer_WindowToInternalPoint(const EngineContext* ctx, Vec2 window_point, Vec2* internal_point);
 bool Renderer_WindowToWorldPoint(const EngineContext* ctx, Vec2 window_point, Vec2* world_point);
 bool Renderer_Render(EngineContext* ctx);

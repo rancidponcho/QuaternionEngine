@@ -6,7 +6,7 @@ BUILD_DIR    := build
 ANDROID_DIR  := android
 SDL_SRC      := external/SDL
 
-.PHONY: all clean clean-android bootstrap android desktop macos ios
+.PHONY: all clean clean-android bootstrap android desktop macos ios run
 
 # Default target
 all: desktop
@@ -41,6 +41,9 @@ desktop: bootstrap
 	fi
 	@echo "--- Building Desktop ---"
 	cd $(BUILD_DIR) && cmake --build .
+
+run: desktop
+	./$(BUILD_DIR)/$(PROJECT_NAME)
 
 # ------------------------------------------------------------------------------
 # MACOS (Xcode)

@@ -2,6 +2,7 @@
 
 #include <math.h>
 
+#include "math/scalar.h"
 #include "math/vec.h"
 
 #define MATTER_BOND_REST_CONTACT_SCALE 0.93f
@@ -84,11 +85,13 @@ static const MaterialDef MATERIAL_DEFS[MATERIAL_COUNT] = {
     }
 };
 
-static float MatterMaterial_ClampFloat(float value, float min_value, float max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
+static const char* MATERIAL_NAMES[MATERIAL_COUNT] = {
+    [MATERIAL_MUD] = "Mud",
+    [MATERIAL_ROCK] = "Rock",
+    [MATERIAL_GEL] = "Gel",
+    [MATERIAL_IRON] = "Iron",
+    [MATERIAL_PLAYER] = "Player"
+};
 
 const MaterialDef* Matter_GetMaterialDef(MaterialId material) {
     if (!Matter_IsValidMaterial(material)) {
@@ -123,6 +126,14 @@ uint32_t Matter_TerrainMaterialMask(void) {
         Matter_MaterialMask(MATERIAL_ROCK) |
         Matter_MaterialMask(MATERIAL_GEL) |
         Matter_MaterialMask(MATERIAL_IRON);
+}
+
+const char* Matter_MaterialName(MaterialId material) {
+    if (!Matter_IsValidMaterial(material)) {
+        return "--";
+    }
+
+    return MATERIAL_NAMES[material];
 }
 
 bool Matter_MaterialInMask(MaterialId material, uint32_t material_mask) {
@@ -312,7 +323,7 @@ float Matter_PairCollisionResponse(const MatterNode* a, const MatterNode* b) {
     const MaterialDef* material_a = Matter_GetMaterialDef(a->material);
     const MaterialDef* material_b = Matter_GetMaterialDef(b->material);
     float softness = (material_a->contact_softness + material_b->contact_softness) * 0.5f;
-    return MatterMaterial_ClampFloat(1.0f - softness, 0.16f, 0.94f);
+    return Float_Clamp(1.0f - softness, 0.16f, 0.94f);
 }
 
 bool Matter_IsPlayerTerrainPair(const MatterNode* a, const MatterNode* b) {

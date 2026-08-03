@@ -31,6 +31,18 @@ cbuffer Uniforms : register(b0, space2)
     uint    physicsDebugFlags;
     float   physicsDebugCircleWidth;
     float   physicsDebugFieldWidth;
+    float2  miningBeamStart;
+    float2  miningBeamEnd;
+    uint    miningBeamActive;
+    uint    miningBeamHit;
+    float   miningBeamWidth;
+    float   miningTipRadius;
+    float2  miningToolStart;
+    float2  miningToolEnd;
+    uint    miningToolActive;
+    uint    miningToolFiring;
+    float   miningToolWidth;
+    float   miningToolTipRadius;
 };
 
 RWTexture2D<float4> DestTex : register(u0, space1);
@@ -273,6 +285,75 @@ float3 applyPhysicsDebug(float2 worldP, MatterSample matter, float3 color)
     return color;
 }
 
+float distanceToSegment(float2 p, float2 a, float2 b)
+{
+    float2 ab = b - a;
+    float lenSq = dot(ab, ab);
+    if (lenSq <= 0.0001) {
+        return length(p - a);
+    }
+
+    float t = saturate(dot(p - a, ab) / lenSq);
+    return length(p - (a + ab * t));
+}
+
+float3 applyMiningTool(float2 worldP, float3 color)
+{
+    if (miningToolActive == 0u) {
+        return color;
+    }
+
+    float shaftDistance = distanceToSegment(worldP, miningToolStart, miningToolEnd);
+    float shaft = 1.0 - smoothstep(miningToolWidth, miningToolWidth + 0.75, shaftDistance);
+    if (shaft > 0.0) {
+        float3 shaftColor = (miningToolFiring != 0u) ?
+            float3(0.74, 0.60, 0.38) :
+            float3(0.52, 0.48, 0.39);
+        color = lerp(color, shaftColor, shaft * 0.86);
+    }
+
+    float tipDistance = length(worldP - miningToolEnd);
+    float tip = 1.0 - smoothstep(miningToolTipRadius, miningToolTipRadius + 0.7, tipDistance);
+    if (tip > 0.0) {
+        float3 tipColor = (miningToolFiring != 0u) ?
+            float3(1.00, 0.68, 0.26) :
+            float3(0.74, 0.70, 0.56);
+        color = lerp(color, tipColor, tip * 0.90);
+    }
+
+    return color;
+}
+
+float3 applyMiningBeam(float2 worldP, float3 color)
+{
+    if (miningBeamActive == 0u) {
+        return color;
+    }
+
+    float beamDistance = distanceToSegment(worldP, miningBeamStart, miningBeamEnd);
+    float beam = 1.0 - smoothstep(miningBeamWidth, miningBeamWidth + 0.9, beamDistance);
+    if (beam > 0.0) {
+        float dash = ((((uint)worldP.x + ((uint)worldP.y * 3u)) & 3u) == 0u) ? 0.82 : 1.0;
+        color = lerp(color, float3(0.80, 0.72, 0.48) * dash, beam * 0.62);
+    }
+
+    float tipDistance = length(worldP - miningBeamEnd);
+    float ring = 1.0 - smoothstep(0.55, 1.15, abs(tipDistance - miningTipRadius));
+    if (ring > 0.0) {
+        float3 ringColor = (miningBeamHit != 0u) ?
+            float3(1.00, 0.72, 0.30) :
+            float3(0.72, 0.70, 0.58);
+        color = lerp(color, ringColor, ring * 0.82);
+    }
+
+    if (miningBeamHit != 0u && tipDistance < miningTipRadius * 0.56) {
+        float grit = ((((uint)worldP.x * 5u + ((uint)worldP.y * 7u)) & 7u) <= 2u) ? 1.0 : 0.0;
+        color = lerp(color, float3(0.18, 0.13, 0.10), grit * 0.45);
+    }
+
+    return color;
+}
+
 float3 applyCursor(float2 p, float3 color)
 {
     if (cursorVisible == 0u) {
@@ -302,6 +383,8 @@ void main(uint3 id : SV_DispatchThreadID)
         color = shadeMatter(matter, p);
     }
     color = applyPhysicsDebug(worldP, matter, color);
+    color = applyMiningTool(worldP, color);
+    color = applyMiningBeam(worldP, color);
     color = applyCursor(p, color);
 
     DestTex[id.xy] = float4(color, 1.0);

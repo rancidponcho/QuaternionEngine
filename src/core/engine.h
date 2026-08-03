@@ -59,6 +59,8 @@ typedef struct EngineContext {
         float render_ms;
         uint32_t mining_nodes;
         float mining_area;
+        MaterialId mining_material;
+        bool mining_hit;
     } profile;
 } EngineContext;
 

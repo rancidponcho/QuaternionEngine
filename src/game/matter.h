@@ -72,7 +72,22 @@ typedef struct MatterIsland {
 typedef struct MatterMiningResult {
     uint32_t affected_nodes;
     float removed_area;
+    float removed_area_by_material[MATERIAL_COUNT];
 } MatterMiningResult;
+
+typedef struct MatterRayHit {
+    Vec2 point;
+    float distance;
+    MaterialId material;
+    bool hit;
+} MatterRayHit;
+
+typedef struct MatterWorldStats {
+    uint32_t active_node_count;
+    uint32_t constraint_count;
+    uint32_t bend_constraint_count;
+    uint32_t island_count;
+} MatterWorldStats;
 
 typedef struct MatterWorld {
     MatterNode nodes[MAX_MATTER_NODES];
@@ -117,8 +132,13 @@ void MatterWorld_GeneratePlanet(
     uint32_t node_count,
     uint32_t seed
 );
+Vec2 MatterWorld_FindSurfaceSpawnPoint(const MatterWorld* world, Vec2 fallback, float clearance);
 uint32_t Matter_MaterialMask(MaterialId material);
 uint32_t Matter_TerrainMaterialMask(void);
+const char* Matter_MaterialName(MaterialId material);
+MatterWorldStats MatterWorld_GetStats(const MatterWorld* world);
+uint32_t MatterWorld_GetGPUNodes(const MatterWorld* world, const MatterNodeGPU** out_nodes);
+bool MatterWorld_CanAddNodes(const MatterWorld* world, uint32_t count);
 bool MatterWorld_AddMaterialNode(
     MatterWorld* world,
     Vec2 pos,
@@ -158,8 +178,16 @@ void MatterWorld_ApplyConstraintTargetForce(
     float strength,
     float dt
 );
+bool MatterWorld_GetGravityAtNode(const MatterWorld* world, uint16_t node_id, Vec2* out_accel);
 void MatterWorld_ApplyIslandGravityToMatter(MatterWorld* world, float dt);
 void MatterWorld_ApplyIslandGravityToMaterial(MatterWorld* world, MaterialId material, float dt);
+bool MatterWorld_Raycast(
+    MatterWorld* world,
+    Vec2 start,
+    Vec2 end,
+    uint32_t material_mask,
+    MatterRayHit* out_hit
+);
 MatterMiningResult MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount);
 void MatterWorld_Update(MatterWorld* world, float dt);
 

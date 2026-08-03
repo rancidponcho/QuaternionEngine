@@ -28,6 +28,10 @@
 #define MATTER_RENDER_FIELD_SUPPORT_SCALE 2.25f
 #define PHYSICS_DEBUG_CIRCLE_WIDTH 0.65f
 #define PHYSICS_DEBUG_FIELD_WIDTH 0.045f
+#define MINING_BEAM_WIDTH 0.9f
+#define MINING_TIP_RADIUS 5.0f
+#define MINING_TOOL_WIDTH 1.6f
+#define MINING_TOOL_TIP_RADIUS 2.4f
 
 // -----------------------------------------------------------------------------
 // Internal Helpers
@@ -102,9 +106,11 @@ static uint32_t Renderer_CollectVisibleMatterNodes(
     MatterNodeGPU* out_nodes
 ) {
     uint32_t count = 0;
+    const MatterNodeGPU* matter_nodes = NULL;
+    uint32_t matter_node_count = MatterWorld_GetGPUNodes(&ctx->matter, &matter_nodes);
 
-    for (uint32_t i = 0; i < ctx->matter.gpu_node_count; i++) {
-        const MatterNodeGPU* node = &ctx->matter.gpu_nodes[i];
+    for (uint32_t i = 0; i < matter_node_count; i++) {
+        const MatterNodeGPU* node = &matter_nodes[i];
         if (!Renderer_MatterNodeTouchesView(
                 node,
                 view_origin,
@@ -282,6 +288,57 @@ void Renderer_UpdateCamera(EngineContext* ctx, Vec2 target_center, float dt) {
     );
 }
 
+Vec2 Renderer_GetInternalSize(const EngineContext* ctx) {
+    if (!ctx) {
+        return (Vec2){0.0f, 0.0f};
+    }
+
+    return (Vec2){
+        (float)ctx->renderer.internalW,
+        (float)ctx->renderer.internalH
+    };
+}
+
+void Renderer_TogglePhysicsDebug(EngineContext* ctx, Uint32 flags) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->renderer.physicsDebugFlags ^= flags;
+}
+
+Uint32 Renderer_GetVisibleMatterNodeCount(const EngineContext* ctx) {
+    return ctx ? ctx->renderer.visibleMatterNodeCount : 0u;
+}
+
+void Renderer_SetMiningTool(EngineContext* ctx, Vec2 start, Vec2 end, bool active, bool firing) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->renderer.miningToolStart = start;
+    ctx->renderer.miningToolEnd = end;
+    ctx->renderer.miningToolActive = active;
+    ctx->renderer.miningToolFiring = firing;
+}
+
+void Renderer_SetMiningBeam(EngineContext* ctx, Vec2 start, Vec2 end, bool active, bool hit) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->renderer.miningBeamStart = start;
+    ctx->renderer.miningBeamEnd = end;
+    ctx->renderer.miningBeamActive = active;
+    ctx->renderer.miningBeamHit = hit;
+}
+
+void Renderer_ClearMiningOverlay(EngineContext* ctx) {
+    Vec2 zero = {0.0f, 0.0f};
+    Renderer_SetMiningTool(ctx, zero, zero, false, false);
+    Renderer_SetMiningBeam(ctx, zero, zero, false, false);
+}
+
 bool Renderer_WindowToInternalPoint(const EngineContext* ctx, Vec2 window_point, Vec2* internal_point) {
     if (!ctx || !internal_point) {
         return false;
@@ -367,7 +424,19 @@ bool Renderer_Render(EngineContext* ctx) {
             .cursorVisible = cursorVisible ? 1u : 0u,
             .physicsDebugFlags = ctx->renderer.physicsDebugFlags,
             .physicsDebugCircleWidth = PHYSICS_DEBUG_CIRCLE_WIDTH,
-            .physicsDebugFieldWidth = PHYSICS_DEBUG_FIELD_WIDTH
+            .physicsDebugFieldWidth = PHYSICS_DEBUG_FIELD_WIDTH,
+            .miningBeamStart = ctx->renderer.miningBeamStart,
+            .miningBeamEnd = ctx->renderer.miningBeamEnd,
+            .miningBeamActive = ctx->renderer.miningBeamActive ? 1u : 0u,
+            .miningBeamHit = ctx->renderer.miningBeamHit ? 1u : 0u,
+            .miningBeamWidth = MINING_BEAM_WIDTH,
+            .miningTipRadius = MINING_TIP_RADIUS,
+            .miningToolStart = ctx->renderer.miningToolStart,
+            .miningToolEnd = ctx->renderer.miningToolEnd,
+            .miningToolActive = ctx->renderer.miningToolActive ? 1u : 0u,
+            .miningToolFiring = ctx->renderer.miningToolFiring ? 1u : 0u,
+            .miningToolWidth = MINING_TOOL_WIDTH,
+            .miningToolTipRadius = MINING_TOOL_TIP_RADIUS
         };
 
         size_t matterUploadSize = visibleMatterNodeCount * sizeof(MatterNodeGPU);

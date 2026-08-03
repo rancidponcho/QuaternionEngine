@@ -1,14 +1,19 @@
 #include "game/matter.h"
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
 #include "game/matter_internal.h"
+#include "math/scalar.h"
 
 #define MATTER_TAU 6.2831853f
 #define MATTER_PI 3.1415927f
 #define MATTER_MIN_NODE_RADIUS 0.75f
 #define MATTER_MINING_AREA_DAMAGE_SCALE 9.0f
+#define MATTER_RAY_STEP 2.0f
+#define MATTER_RAY_QUERY_RADIUS 24.0f
+#define MATTER_RAY_REFINE_STEPS 5u
 #define MATTER_VISUAL_BRIDGE_SAMPLE_STEP 1.75f
 #define MATTER_VISUAL_BRIDGE_MIN_SAMPLES 5u
 #define MATTER_VISUAL_BRIDGE_MAX_SAMPLES 18u
@@ -75,16 +80,6 @@ typedef struct MatterMaterialCounts {
     uint32_t iron;
 } MatterMaterialCounts;
 
-static float Matter_ClampFloat(float value, float min_value, float max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
-
-static float Matter_LerpFloat(float a, float b, float t) {
-    return a + (b - a) * t;
-}
-
 static bool Matter_NodeOverlapsRadius(const MatterNode* node, Vec2 center, float radius) {
     float reach = radius + node->radius;
     return Vec2_DistanceSq(node->pos, center) <= reach * reach;
@@ -98,11 +93,16 @@ static float Matter_RadiusForArea(float area) {
     return sqrtf(area / MATTER_PI);
 }
 
-static Vec2 Matter_Lerp(Vec2 a, Vec2 b, float t) {
-    return (Vec2){
-        a.x + (b.x - a.x) * t,
-        a.y + (b.y - a.y) * t
-    };
+static float Matter_MiningDamageForNode(const MatterNode* node, Vec2 center, float radius, float amount) {
+    float distance = sqrtf(Vec2_DistanceSq(node->pos, center));
+    float surface_distance = fmaxf(distance - node->radius, 0.0f);
+    float falloff = 1.0f - Float_Clamp(surface_distance / radius, 0.0f, 1.0f);
+    const MaterialDef* def = Matter_GetMaterialDef(node->material);
+
+    return amount *
+        MATTER_MINING_AREA_DAMAGE_SCALE *
+        def->mining_damage_scale *
+        (0.25f + 0.75f * falloff * falloff);
 }
 
 static uint32_t Matter_Hash(uint32_t x) {
@@ -375,6 +375,10 @@ uint32_t MatterWorld_QueryNodes(
     uint16_t* out_nodes,
     uint32_t max_nodes
 ) {
+    if (!world) {
+        return 0;
+    }
+
     MatterWorld_RebuildGrid(world);
     return MatterWorld_CollectNodesInGrid(world, center, radius, material_mask, out_nodes, max_nodes);
 }
@@ -511,7 +515,8 @@ static float MatterWorld_FieldAndNormalAtMaskLocal(
     Vec2 p,
     uint32_t material_mask,
     float radius,
-    Vec2* out_normal
+    Vec2* out_normal,
+    MaterialId* out_material
 ) {
     float fields[MATERIAL_COUNT] = {0};
     Vec2 outward_by_material[MATERIAL_COUNT] = {0};
@@ -556,6 +561,10 @@ static float MatterWorld_FieldAndNormalAtMaskLocal(
             field = fields[i];
             best_material = (MaterialId)i;
         }
+    }
+
+    if (out_material) {
+        *out_material = best_material;
     }
 
     Vec2 outward = outward_by_material[best_material];
@@ -1016,7 +1025,8 @@ static Vec2 MatterWorld_FieldCollisionCorrection(
             probe,
             collision_mask,
             query_radius,
-            &normal
+            &normal,
+            NULL
         );
 
     if (field < MATTER_FIELD_COLLISION_THRESHOLD) {
@@ -1024,7 +1034,7 @@ static Vec2 MatterWorld_FieldCollisionCorrection(
     }
 
     float push = (field - MATTER_FIELD_COLLISION_THRESHOLD) * depth_scale;
-    push = Matter_ClampFloat(push, 0.0f, max_push);
+    push = Float_Clamp(push, 0.0f, max_push);
     return Vec2_Scale(normal, push);
 }
 
@@ -1346,8 +1356,8 @@ static void MatterWorld_UpdateConstraintMaterialResponse(
 
     if (plastic_creep > 0.0f && abs_strain > plastic_yield) {
         float creep = (abs_strain - plastic_yield) * plastic_creep * dt;
-        creep = Matter_ClampFloat(creep, 0.0f, 0.35f);
-        constraint->rest_length = Matter_LerpFloat(rest_length, distance, creep);
+        creep = Float_Clamp(creep, 0.0f, 0.35f);
+        constraint->rest_length = Float_Lerp(rest_length, distance, creep);
     }
 }
 
@@ -1458,6 +1468,25 @@ static void MatterWorld_UpdateNodeMass(MatterNode* node) {
     const MaterialDef* def = Matter_GetMaterialDef(node->material);
     node->mass = def->density * node->radius * node->radius;
     node->inv_mass = (node->mass > 0.0f) ? 1.0f / node->mass : 0.0f;
+}
+
+static bool MatterWorld_RemoveNode(MatterWorld* world, uint32_t node_id) {
+    if (!world || node_id >= world->node_count) {
+        return false;
+    }
+
+    MatterNode* node = &world->nodes[node_id];
+    if (node->radius <= 0.0f) {
+        return false;
+    }
+
+    node->radius = 0.0f;
+    node->vel = (Vec2){0.0f, 0.0f};
+    node->prev_pos = node->pos;
+    MatterWorld_UpdateNodeMass(node);
+    MatterWorld_DeactivateConstraintsForNode(world, node_id);
+    world->islands_dirty = true;
+    return true;
 }
 
 static void Matter_LimitNodeVelocity(MatterNode* node) {
@@ -1600,7 +1629,7 @@ static float Matter_AsteroidRadiusAtAngle(float radius, uint32_t seed, float ang
         amp_c * cosf(angle * 5.0f + phase_c);
 
     return radius * MATTER_ASTEROID_BASE_RADIUS_SCALE *
-        Matter_ClampFloat(shape, 0.78f, 1.18f);
+        Float_Clamp(shape, 0.78f, 1.18f);
 }
 
 static MatterMaterialCluster Matter_CreatePlanetCluster(
@@ -1614,12 +1643,12 @@ static MatterMaterialCluster Matter_CreatePlanetCluster(
 ) {
     float angle = Matter_Random01(seed + 11u) * MATTER_TAU;
     float distance = planet_radius *
-        Matter_LerpFloat(min_distance_scale, max_distance_scale, Matter_Random01(seed + 23u));
+        Float_Lerp(min_distance_scale, max_distance_scale, Matter_Random01(seed + 23u));
 
     return (MatterMaterialCluster){
         .center = {cosf(angle) * distance, sinf(angle) * distance},
         .radius = planet_radius *
-            Matter_LerpFloat(min_radius_scale, max_radius_scale, Matter_Random01(seed + 37u)),
+            Float_Lerp(min_radius_scale, max_radius_scale, Matter_Random01(seed + 37u)),
         .roughness = roughness,
         .angle = Matter_Random01(seed + 41u) * MATTER_TAU,
         .aspect = 1.0f,
@@ -1647,7 +1676,7 @@ static MatterMaterialCluster Matter_CreatePlanetVein(
         0.52f
     );
 
-    vein.aspect = Matter_LerpFloat(min_aspect, max_aspect, Matter_Random01(seed + 137u));
+    vein.aspect = Float_Lerp(min_aspect, max_aspect, Matter_Random01(seed + 137u));
     return vein;
 }
 
@@ -1701,7 +1730,7 @@ static float Matter_ClusterRadiusAtAngle(const MatterMaterialCluster* cluster, f
     float shape = 1.0f + cluster->roughness *
         (0.58f * cosf(angle * 2.0f + phase_a) + 0.42f * sinf(angle * 5.0f + phase_b));
 
-    return cluster->radius * Matter_ClampFloat(shape, 0.62f, 1.38f);
+    return cluster->radius * Float_Clamp(shape, 0.62f, 1.38f);
 }
 
 static bool Matter_PointInCluster(Vec2 local, const MatterMaterialCluster* cluster) {
@@ -1847,7 +1876,7 @@ static Vec2 MatterWorld_PlanetCandidatePosition(
     const MatterNode* anchor = &world->nodes[start + anchor_offset];
     float angle = Matter_Random01(seed + 89u) * MATTER_TAU;
     float distance = (anchor->radius + node_radius) *
-        Matter_LerpFloat(0.74f, 0.97f, Matter_Random01(seed + 107u));
+        Float_Lerp(0.74f, 0.97f, Matter_Random01(seed + 107u));
 
     return (Vec2){
         anchor->pos.x + cosf(angle) * distance,
@@ -1981,13 +2010,10 @@ static bool MatterWorld_PruneAsteroidSurfaceLeaves(
                 continue;
             }
 
-            node->radius = 0.0f;
-            node->vel = (Vec2){0.0f, 0.0f};
-            node->prev_pos = node->pos;
-            MatterWorld_UpdateNodeMass(node);
-            MatterWorld_DeactivateConstraintsForNode(world, i);
-            removed_this_pass = true;
-            removed_any = true;
+            if (MatterWorld_RemoveNode(world, i)) {
+                removed_this_pass = true;
+                removed_any = true;
+            }
         }
 
         if (!removed_this_pass) {
@@ -2018,6 +2044,69 @@ void MatterWorld_SpawnBlob(
     MatterWorld_AddBlob(world, center, blob_radius, node_count, material, (Vec2){0.0f, 0.0f});
     MatterWorld_UpdateIslands(world);
     MatterWorld_RebuildGPUCache(world);
+}
+
+Vec2 MatterWorld_FindSurfaceSpawnPoint(const MatterWorld* world, Vec2 fallback, float clearance) {
+    if (!world) {
+        return fallback;
+    }
+
+    Vec2 spawn = fallback;
+    float best_surface_y = FLT_MAX;
+
+    for (uint32_t i = 0; i < world->node_count; i++) {
+        const MatterNode* node = &world->nodes[i];
+        if (node->radius <= 0.0f || node->material == MATERIAL_PLAYER) {
+            continue;
+        }
+
+        float surface_y = node->pos.y - node->radius;
+        if (surface_y < best_surface_y) {
+            best_surface_y = surface_y;
+            spawn = (Vec2){node->pos.x, surface_y - clearance};
+        }
+    }
+
+    return spawn;
+}
+
+MatterWorldStats MatterWorld_GetStats(const MatterWorld* world) {
+    if (!world) {
+        return (MatterWorldStats){0};
+    }
+
+    uint32_t active_constraints = 0;
+    for (uint32_t i = 0; i < world->constraint_count; i++) {
+        if (world->constraints[i].active) {
+            active_constraints++;
+        }
+    }
+
+    uint32_t active_bend_constraints = 0;
+    for (uint32_t i = 0; i < world->bend_constraint_count; i++) {
+        if (world->bend_constraints[i].active) {
+            active_bend_constraints++;
+        }
+    }
+
+    return (MatterWorldStats){
+        .active_node_count = world->gpu_node_count,
+        .constraint_count = active_constraints,
+        .bend_constraint_count = active_bend_constraints,
+        .island_count = world->island_count
+    };
+}
+
+uint32_t MatterWorld_GetGPUNodes(const MatterWorld* world, const MatterNodeGPU** out_nodes) {
+    if (out_nodes) {
+        *out_nodes = world ? world->gpu_nodes : NULL;
+    }
+
+    return world ? world->gpu_node_count : 0;
+}
+
+bool MatterWorld_CanAddNodes(const MatterWorld* world, uint32_t count) {
+    return world && count <= MAX_MATTER_NODES - world->node_count;
 }
 
 void MatterWorld_GeneratePlanet(
@@ -2185,6 +2274,110 @@ void MatterWorld_ApplyConstraintTargetForce(
     MatterWorld_ApplyForceBetweenNodes(world, node, anchor, force_on_node, dt);
 }
 
+static float MatterWorld_RayFieldAt(
+    const MatterWorld* world,
+    Vec2 point,
+    uint32_t material_mask,
+    MaterialId* out_material
+) {
+    return MatterWorld_FieldAndNormalAtMaskLocal(
+        world,
+        point,
+        material_mask,
+        MATTER_RAY_QUERY_RADIUS,
+        NULL,
+        out_material
+    );
+}
+
+bool MatterWorld_Raycast(
+    MatterWorld* world,
+    Vec2 start,
+    Vec2 end,
+    uint32_t material_mask,
+    MatterRayHit* out_hit
+) {
+    if (out_hit) {
+        *out_hit = (MatterRayHit){0};
+    }
+
+    if (!world || material_mask == 0u) {
+        return false;
+    }
+
+    Vec2 delta = Vec2_Sub(end, start);
+    float length_sq = Vec2_LengthSq(delta);
+    if (length_sq <= 0.0001f) {
+        return false;
+    }
+
+    float length = sqrtf(length_sq);
+    Vec2 direction = Vec2_Scale(delta, 1.0f / length);
+    MatterWorld_RebuildGrid(world);
+
+    Vec2 prev_point = start;
+    float prev_distance = 0.0f;
+    MaterialId material = MATERIAL_MUD;
+    float field = MatterWorld_RayFieldAt(world, prev_point, material_mask, &material);
+    if (field >= MATTER_FIELD_THRESHOLD) {
+        if (out_hit) {
+            *out_hit = (MatterRayHit){
+                .point = prev_point,
+                .distance = 0.0f,
+                .material = material,
+                .hit = true
+            };
+        }
+        return true;
+    }
+
+    for (float distance = MATTER_RAY_STEP;
+         distance <= length + MATTER_RAY_STEP * 0.5f;
+         distance += MATTER_RAY_STEP)
+    {
+        float sample_distance = fminf(distance, length);
+        Vec2 point = Vec2_Add(start, Vec2_Scale(direction, sample_distance));
+        field = MatterWorld_RayFieldAt(world, point, material_mask, &material);
+        if (field < MATTER_FIELD_THRESHOLD) {
+            prev_point = point;
+            prev_distance = sample_distance;
+            continue;
+        }
+
+        Vec2 low = prev_point;
+        Vec2 high = point;
+        float low_distance = prev_distance;
+        float high_distance = sample_distance;
+
+        for (uint32_t refine = 0; refine < MATTER_RAY_REFINE_STEPS; refine++) {
+            Vec2 mid = Vec2_Lerp(low, high, 0.5f);
+            float mid_distance = (low_distance + high_distance) * 0.5f;
+            float mid_field = MatterWorld_RayFieldAt(world, mid, material_mask, &material);
+
+            if (mid_field >= MATTER_FIELD_THRESHOLD) {
+                high = mid;
+                high_distance = mid_distance;
+            } else {
+                low = mid;
+                low_distance = mid_distance;
+            }
+        }
+
+        MatterWorld_RayFieldAt(world, high, material_mask, &material);
+        if (out_hit) {
+            *out_hit = (MatterRayHit){
+                .point = high,
+                .distance = high_distance,
+                .material = material,
+                .hit = true
+            };
+        }
+        return true;
+    }
+
+    return false;
+}
+
 MatterMiningResult MatterWorld_Mine(MatterWorld* world, Vec2 center, float radius, float amount) {
     MatterMiningResult result = {0};
 
@@ -2218,33 +2411,24 @@ MatterMiningResult MatterWorld_Mine(MatterWorld* world, Vec2 center, float radiu
                     continue;
                 }
 
-                float distance_sq = Vec2_DistanceSq(node->pos, center);
-                float distance = sqrtf(distance_sq);
-                float surface_distance = fmaxf(distance - node->radius, 0.0f);
-                float falloff = 1.0f - Matter_ClampFloat(surface_distance / radius, 0.0f, 1.0f);
-                const MaterialDef* def = Matter_GetMaterialDef(node->material);
-                float damage = amount *
-                    MATTER_MINING_AREA_DAMAGE_SCALE *
-                    def->mining_damage_scale *
-                    (0.25f + 0.75f * falloff * falloff);
+                MaterialId mined_material = node->material;
+                float damage = Matter_MiningDamageForNode(node, center, radius, amount);
                 float previous_area = Matter_CircleArea(node->radius);
                 float mined_area = previous_area - damage;
+                float removed_area = 0.0f;
                 affected_nodes[node_id] = true;
 
                 if (mined_area <= min_area) {
-                    result.removed_area += previous_area;
-                    node->radius = 0.0f;
-                    node->vel = (Vec2){0.0f, 0.0f};
-                    node->prev_pos = node->pos;
-                    world->islands_dirty = true;
-                    topology_changed = true;
-                    topology_changed |= MatterWorld_DeactivateConstraintsForNode(world, (uint32_t)node_id);
+                    removed_area = previous_area;
+                    topology_changed |= MatterWorld_RemoveNode(world, (uint32_t)node_id);
                 } else {
-                    result.removed_area += previous_area - mined_area;
+                    removed_area = previous_area - mined_area;
                     node->radius = Matter_RadiusForArea(mined_area);
+                    MatterWorld_UpdateNodeMass(node);
                 }
 
-                MatterWorld_UpdateNodeMass(node);
+                result.removed_area += removed_area;
+                result.removed_area_by_material[mined_material] += removed_area;
                 result.affected_nodes++;
             }
         }
@@ -2279,7 +2463,7 @@ static void MatterWorld_IntegrateNodes(MatterWorld* world, float dt) {
             continue;
         }
 
-        float damping = Matter_ClampFloat(1.0f - def->damping * dt, 0.0f, 1.0f);
+        float damping = Float_Clamp(1.0f - def->damping * dt, 0.0f, 1.0f);
         node->prev_pos = node->pos;
         node->vel = Vec2_Scale(node->vel, damping);
         Matter_LimitNodeVelocity(node);
@@ -2329,7 +2513,7 @@ void MatterWorld_Update(MatterWorld* world, float dt) {
         return;
     }
 
-    dt = Matter_ClampFloat(dt, 0.0f, 1.0f / 30.0f);
+    dt = Float_Clamp(dt, 0.0f, 1.0f / 30.0f);
     world->time += dt;
 
     MatterWorld_IntegrateNodes(world, dt);
@@ -2400,7 +2584,7 @@ static bool MatterWorld_ConstraintStillSupported(
 
     for (uint32_t sample = 1; sample <= sample_count; sample++) {
         float t = (float)sample / (float)(sample_count + 1u);
-        Vec2 p = Matter_Lerp(a->pos, b->pos, t);
+        Vec2 p = Vec2_Lerp(a->pos, b->pos, t);
 
         if (!MatterWorld_MaterialFieldReachesLocal(world, p, a->material, threshold, query_radius)) {
             return false;
